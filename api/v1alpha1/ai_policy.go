@@ -53,25 +53,22 @@ func (in *AIRoutePolicy) Equals(ai *AIRoutePolicy) bool {
 // and appends `Describe the painting as if you were a famous art critic from the 17th century.`
 // to each request that is sent to the `openai` HTTPRoute.
 // ```yaml
-//
-//	name: openai-opt
-//	namespace: kgateway-system
-//
+// metadata:
+//  name: openai-opt
+//  namespace: kgateway-system
 // spec:
-//
-//	targetRefs:
-//	- group: gateway.networking.k8s.io
-//	  kind: HTTPRoute
-//	  name: openai
-//	aiRoutePolicy:
-//	    promptEnrichment:
-//	      prepend:
-//	      - role: SYSTEM
-//	        content: "Answer all questions in French."
-//	      append:
-//	      - role: USER
-//	        content: "Describe the painting as if you were a famous art critic from the 17th century."
-//
+//  targetRefs:
+//  - group: gateway.networking.k8s.io
+//    kind: HTTPRoute
+//    name: openai
+//  aiRoutePolicy:
+//      promptEnrichment:
+//        prepend:
+//        - role: SYSTEM
+//          content: "Answer all questions in French."
+//        append:
+//        - role: USER
+//          content: "Describe the painting as if you were a famous art critic from the 17th century."
 // ```
 type AIPromptEnrichment struct {
 	// A list of messages to be prepended to the prompt sent by the client.
@@ -233,21 +230,19 @@ type PromptguardResponse struct {
 // the string "credit card", and masks any credit card numbers in the response.
 // ```yaml
 // promptGuard:
-//
-//	request:
-//	  customResponse:
-//	    message: "Rejected due to inappropriate content"
-//	  regex:
-//	    action: REJECT
-//	    matches:
-//	    - pattern: "credit card"
-//	      name: "CC"
-//	response:
-//	  regex:
-//	    builtins:
-//	    - CREDIT_CARD
-//	    action: MASK
-//
+//  request:
+//    customResponse:
+//      message: "Rejected due to inappropriate content"
+//    regex:
+//      action: REJECT
+//      matches:
+//      - pattern: "credit card"
+//        name: "CC"
+//  response:
+//    regex:
+//      builtins:
+//      - CREDIT_CARD
+//      action: MASK
 // ```
 type AIPromptGuard struct {
 	// Prompt guards to apply to requests sent by the client.
@@ -267,7 +262,6 @@ type AIPromptGuard struct {
 // defaults:
 //   - field: "system"
 //     value: "answer all questions in French"
-//
 // ```
 //
 // Example: Setting a default temperature and overriding `max_tokens`:
@@ -278,7 +272,6 @@ type AIPromptGuard struct {
 //   - field: "max_tokens"
 //     value: "100"
 //     override: true
-//
 // ```
 //
 // Example: Overriding a custom list field:
@@ -286,7 +279,6 @@ type AIPromptGuard struct {
 // defaults:
 //   - field: "custom_list"
 //     value: "[a,b,c]"
-//
 // ```
 //
 // Note: The `field` values correspond to keys in the JSON request body, not fields in this CRD.

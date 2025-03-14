@@ -227,26 +227,25 @@ type Priority struct {
 //
 // ```yaml
 // multi:
-//
-//	priorities:
-//	- pool:
-//	  - azureOpenai:
-//	      deploymentName: gpt-4o-mini
-//	      apiVersion: 2024-02-15-preview
-//	      endpoint: ai-gateway.openai.azure.com
-//	      authToken:
-//	        secretRef:
-//	          name: azure-secret
-//	          namespace: kgateway-system
-//	- pool:
-//	  - azureOpenai:
-//	      deploymentName: gpt-4o-mini-2
-//	      apiVersion: 2024-02-15-preview
-//	      endpoint: ai-gateway-2.openai.azure.com
-//	      authToken:
-//	        secretRef:
-//	          name: azure-secret-2
-//	          namespace: kgateway-system
+//  priorities:
+//  - pool:
+//    - azureOpenai:
+//        deploymentName: gpt-4o-mini
+//        apiVersion: 2024-02-15-preview
+//        endpoint: ai-gateway.openai.azure.com
+//        authToken:
+//          secretRef:
+//            name: azure-secret
+//            namespace: kgateway-system
+//  - pool:
+//    - azureOpenai:
+//        deploymentName: gpt-4o-mini-2
+//        apiVersion: 2024-02-15-preview
+//        endpoint: ai-gateway-2.openai.azure.com
+//        authToken:
+//          secretRef:
+//            name: azure-secret-2
+//            namespace: kgateway-system
 //
 // ```
 type MultiPoolConfig struct {

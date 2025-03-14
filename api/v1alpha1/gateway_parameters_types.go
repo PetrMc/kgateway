@@ -275,7 +275,7 @@ type EnvoyBootstrap struct {
 	// the values are one of "trace", "debug", "info", "warn", "error",
 	// "critical", or "off", e.g.
 	//
-	//	```yaml
+	//	``yaml
 	//	componentLogLevels:
 	//	  upstream: debug
 	//	  connection: trace
@@ -599,16 +599,16 @@ type AiExtension struct {
 	// +optional
 	//
 	// Example:
-	// ```yaml
-	// stats:
-	//   customLabels:
-	//     - name: "subject"
-	//       metadataNamespace: "envoy.filters.http.jwt_authn"
-	//       metadataKey: "principal:sub"
-	//     - name: "issuer"
-	//       metadataNamespace: "envoy.filters.http.jwt_authn"
-	//       metadataKey: "principal:iss"
-	// ```
+  // ```yaml
+  // stats:
+  //   customLabels:
+  //     - name: "subject"
+  //       metadataNamespace: "envoy.filters.http.jwt_authn"
+  //       metadataKey: "principal:sub"
+  //     - name: "issuer"
+  //       metadataNamespace: "envoy.filters.http.jwt_authn"
+  //       metadataKey: "principal:iss"
+  // ```
 	Stats *AiExtensionStats `json:"stats,omitempty"`
 }
 
