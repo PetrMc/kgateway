@@ -225,29 +225,19 @@ type Priority struct {
 // The `pool` entries can either define a list of backends or a single backend.
 // Note: Only two levels of nesting are permitted. Any nested entries after the second level are ignored.
 //
-// ```yaml
-// multi:
-//  priorities:
-//  - pool:
-//    - azureOpenai:
-//        deploymentName: gpt-4o-mini
-//        apiVersion: 2024-02-15-preview
-//        endpoint: ai-gateway.openai.azure.com
-//        authToken:
-//          secretRef:
-//            name: azure-secret
-//            namespace: kgateway-system
-//  - pool:
-//    - azureOpenai:
-//        deploymentName: gpt-4o-mini-2
-//        apiVersion: 2024-02-15-preview
-//        endpoint: ai-gateway-2.openai.azure.com
-//        authToken:
-//          secretRef:
-//            name: azure-secret-2
-//            namespace: kgateway-system
-//
-// ```
+/* YAML Configuration
+multi:
+  priorities:
+  - pool:
+    - azureOpenai:
+        deploymentName: gpt-4o-mini
+        apiVersion: 2024-02-15-preview
+        endpoint: ai-gateway.openai.azure.com
+        authToken:
+          secretRef:
+            name: azure-secret
+            namespace: kgateway-system
+*/
 type MultiPoolConfig struct {
 	// The priority list of backend pools. Each entry represents a set of LLM provider backends.
 	// The order defines the priority of the backend endpoints.

@@ -599,16 +599,16 @@ type AiExtension struct {
 	// +optional
 	//
 	// Example:
-  // ```yaml
-  // stats:
-  //   customLabels:
-  //     - name: "subject"
-  //       metadataNamespace: "envoy.filters.http.jwt_authn"
-  //       metadataKey: "principal:sub"
-  //     - name: "issuer"
-  //       metadataNamespace: "envoy.filters.http.jwt_authn"
-  //       metadataKey: "principal:iss"
-  // ```
+	/* YAML Configuration
+	   stats:
+	     customLabels:
+	       - name: "subject"
+	         metadataNamespace: "envoy.filters.http.jwt_authn"
+	         metadataKey: "principal:sub"
+	       - name: "issuer"
+	         metadataNamespace: "envoy.filters.http.jwt_authn"
+	         metadataKey: "principal:iss"
+	*/
 	Stats *AiExtensionStats `json:"stats,omitempty"`
 }
 
