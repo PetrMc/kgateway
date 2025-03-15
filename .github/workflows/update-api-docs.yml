@@ -33,11 +33,12 @@ jobs:
       - name: Generate API Reference
         run: |
           TMPDIR=$(mktemp -d)
+          WORKSPACE=$PWD
           cd $TMPDIR
 
           # Generate docs using crd-ref-docs
           go run github.com/elastic/crd-ref-docs@v0.1.0 \
-            --source-path="../kgateway/api/v1alpha1/" \
+            --source-path="$WORKSPACE/kgateway/api/v1alpha1/" \
             --renderer=markdown \
             --output-path ./ \
             --config=<(echo 'processor:
