@@ -32,13 +32,24 @@ jobs:
 
       - name: Generate API Reference
         run: |
+          echo "=== Debug: Starting Generate API Reference ==="
+          echo "Current directory: $PWD"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "Listing GITHUB_WORKSPACE contents:"
+          ls -la $GITHUB_WORKSPACE
+          
           TMPDIR=$(mktemp -d)
-          WORKSPACE=$PWD
+          echo "Created temp directory: $TMPDIR"
           cd $TMPDIR
+          echo "Changed to temp directory: $PWD"
+
+          echo "=== Debug: Before generating docs ==="
+          echo "Looking for API directory:"
+          ls -la "$GITHUB_WORKSPACE/kgateway/api/v1alpha1/" || echo "API directory not found!"
 
           # Generate docs using crd-ref-docs
           go run github.com/elastic/crd-ref-docs@v0.1.0 \
-            --source-path="$WORKSPACE/kgateway/api/v1alpha1/" \
+            --source-path="$GITHUB_WORKSPACE/kgateway/api/v1alpha1/" \
             --renderer=markdown \
             --output-path ./ \
             --config=<(echo 'processor:
@@ -47,8 +58,17 @@ jobs:
             render:
               kubernetesVersion: 1.33')
 
+          echo "=== Debug: After generating docs ==="
+          echo "Temp directory contents:"
+          ls -la .
+          
+          echo "=== Debug: Before updating docs repository ==="
+          echo "Checking docs repository path:"
+          ls -la "$GITHUB_WORKSPACE/kgateway.dev-docs" || echo "Docs repository not found!"
+
           # Update docs repository
-          cd "$WORKSPACE/kgateway.dev-docs"
+          cd "$GITHUB_WORKSPACE/kgateway.dev-docs"
+          echo "Changed to docs repository: $PWD"
           rm -rf content/docs/reference/api/top-level/
           mkdir -p content/docs/reference/api/top-level/
           
@@ -60,6 +80,10 @@ jobs:
           
           '; cat "$TMPDIR/out.md") > content/docs/reference/api/top-level/_index.md
           
+          echo "=== Debug: After creating index file ==="
+          echo "Content directory structure:"
+          ls -la content/docs/reference/api/top-level/
+
           # Format generated docs
           sed -i 's/Required: \\{\\}/Required/g; s/Optional: \\{\\}/Optional/g' content/docs/reference/api/top-level/_index.md
           sed -i '
@@ -79,22 +103,45 @@ jobs:
 
       - name: Create Pull Request
         run: |
-          cd "$WORKSPACE/kgateway.dev-docs"
+          echo "=== Debug: Starting Create Pull Request ==="
+          echo "Current directory: $PWD"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          
+          # Go back to the root directory where repositories were checked out
+          cd $GITHUB_WORKSPACE
+          echo "Changed to GITHUB_WORKSPACE: $PWD"
+          echo "GITHUB_WORKSPACE contents:"
+          ls -la
+          
+          cd kgateway.dev-docs
+          echo "Changed to docs repository: $PWD"
+          echo "Docs repository contents:"
+          ls -la
           
           # Configure git
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
           
+          echo "=== Debug: Git Status ==="
+          git status
+          
           # Create branch with timestamp
           TIMESTAMP=$(date '+%Y%m%d-%H%M')
           BRANCH_NAME="api-gen-update-${TIMESTAMP}"
           git checkout -b "${BRANCH_NAME}"
+          echo "Created and checked out branch: ${BRANCH_NAME}"
           
           # Commit changes
           git add -A content/docs/reference/api/top-level/
+          echo "=== Debug: Git Status after add ==="
+          git status
+          
           git commit -s -m "Docs generated on $(date '+%B %d, %Y at %H:%M')"
+          echo "=== Debug: Git Status after commit ==="
+          git status
           
           # Push changes
+          echo "Attempting to push to branch: ${BRANCH_NAME}"
           git push --set-upstream origin "${BRANCH_NAME}"
           
           # Create PR using GitHub CLI if needed
