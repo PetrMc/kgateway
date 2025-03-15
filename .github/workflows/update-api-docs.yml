@@ -48,7 +48,7 @@ jobs:
               kubernetesVersion: 1.33')
 
           # Update docs repository
-          cd ../kgateway.dev-docs
+          cd "$WORKSPACE/kgateway.dev-docs"
           rm -rf content/docs/reference/api/top-level/
           mkdir -p content/docs/reference/api/top-level/
           
@@ -58,7 +58,7 @@ jobs:
           weight: 10
           ---
           
-          '; cat $TMPDIR/out.md) > content/docs/reference/api/top-level/_index.md
+          '; cat "$TMPDIR/out.md") > content/docs/reference/api/top-level/_index.md
           
           # Format generated docs
           sed -i 's/Required: \\{\\}/Required/g; s/Optional: \\{\\}/Optional/g' content/docs/reference/api/top-level/_index.md
@@ -79,7 +79,7 @@ jobs:
 
       - name: Create Pull Request
         run: |
-          cd kgateway.dev-docs
+          cd "$WORKSPACE/kgateway.dev-docs"
           
           # Configure git
           git config --global user.name "GitHub Action"
