@@ -1,0 +1,100 @@
+name: Update API Documentation
+
+on:
+  workflow_dispatch:  # Allow manual triggers for now
+  # Later we can add:
+  # push:
+  #   paths:
+  #     - 'api/v1alpha1/**'
+  #   branches:
+  #     - main
+
+jobs:
+  generate-api-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kgateway repository
+        uses: actions/checkout@v4
+        with:
+          repository: PetrMc/kgateway
+          path: kgateway
+
+      - name: Checkout docs repository
+        uses: actions/checkout@v4
+        with:
+          repository: PetrMc/kgateway.dev-docs
+          path: kgateway.dev-docs
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+
+      - name: Generate API Reference
+        run: |
+          TMPDIR=$(mktemp -d)
+          cd $TMPDIR
+
+          # Generate docs using crd-ref-docs
+          go run github.com/elastic/crd-ref-docs@v0.1.0 \
+            --source-path="../kgateway/api/v1alpha1/" \
+            --renderer=markdown \
+            --output-path ./ \
+            --config=<(echo 'processor:
+              ignoreTypes:
+                - ".*List$"
+            render:
+              kubernetesVersion: 1.33')
+
+          # Update docs repository
+          cd ../kgateway.dev-docs
+          rm -rf content/docs/reference/api/top-level/
+          mkdir -p content/docs/reference/api/top-level/
+          
+          # Create index file with frontmatter
+          (echo '---
+          title: Top-level APIs
+          weight: 10
+          ---
+          
+          '; cat $TMPDIR/out.md) > content/docs/reference/api/top-level/_index.md
+          
+          # Format generated docs
+          sed -i 's/Required: \\{\\}/Required/g; s/Optional: \\{\\}/Optional/g' content/docs/reference/api/top-level/_index.md
+          sed -i '
+          /```yaml<br \/>/ {
+            s/```yaml<br \/>//
+            s/<br \/>$//
+            /^$/d
+            s/stats:<br \/>/stats:<br \/>/
+            s/  customLabels:<br \/>/\&nbsp;\&nbsp;customLabels:<br \/>/
+            s/    - name:/\&nbsp;\&nbsp;\&nbsp;\&nbsp;- name:/g
+            s/      metadataNamespace:/\&nbsp;\&nbsp;\&nbsp;\&nbsp;\&nbsp;\&nbsp;metadataNamespace:/g
+            s/      metadataKey:/\&nbsp;\&nbsp;\&nbsp;\&nbsp;\&nbsp;\&nbsp;metadataKey:/g
+            s/```//
+            /^\s*$/d
+          }' content/docs/reference/api/top-level/_index.md
+          sed -i '/```yaml/,/```/{ /^```/! { s/\t/  /g; /^\s*$/d } }' content/docs/reference/api/top-level/_index.md
+
+      - name: Create Pull Request
+        run: |
+          cd kgateway.dev-docs
+          
+          # Configure git
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          
+          # Create branch with timestamp
+          TIMESTAMP=$(date '+%Y%m%d-%H%M')
+          BRANCH_NAME="api-gen-update-${TIMESTAMP}"
+          git checkout -b "${BRANCH_NAME}"
+          
+          # Commit changes
+          git add -A content/docs/reference/api/top-level/
+          git commit -s -m "Docs generated on $(date '+%B %d, %Y at %H:%M')"
+          
+          # Push changes
+          git push --set-upstream origin "${BRANCH_NAME}"
+          
+          # Create PR using GitHub CLI if needed
+          # gh pr create --title "Update API Documentation" --body "Automated API documentation update" 
