@@ -123,7 +123,17 @@ jobs:
           # Configure git with token-based authentication
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/PetrMc/kgateway.dev-docs.git
+          
+          # Debug remote before change
+          echo "=== Debug: Current Git Remote ==="
+          git remote -v
+          
+          # Update remote URL with correct token format
+          git remote set-url origin "https://${GITHUB_TOKEN}@github.com/PetrMc/kgateway.dev-docs.git"
+          
+          # Debug remote after change (without exposing token)
+          echo "=== Debug: Updated Git Remote (token hidden) ==="
+          git remote get-url origin | sed 's/https:\/\/.*@/https:\/\/***@/'
           
           echo "=== Debug: Git Status ==="
           git status
