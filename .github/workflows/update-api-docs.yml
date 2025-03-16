@@ -24,6 +24,8 @@ jobs:
         with:
           repository: PetrMc/kgateway.dev-docs
           path: kgateway.dev-docs
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v4
@@ -109,25 +111,12 @@ jobs:
           echo "Current directory: $PWD"
           echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
           
-          # Go back to the root directory where repositories were checked out
-          cd $GITHUB_WORKSPACE
-          echo "Changed to GITHUB_WORKSPACE: $PWD"
-          echo "GITHUB_WORKSPACE contents:"
-          ls -la
-          
-          cd kgateway.dev-docs
+          cd "$GITHUB_WORKSPACE/kgateway.dev-docs"
           echo "Changed to docs repository: $PWD"
-          echo "Docs repository contents:"
-          ls -la
           
-          # Configure git authentication
+          # Configure git
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          
-          # Set up credential helper to use token securely
-          git config --global credential.helper store
-          echo "https://oauth2:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
           
           echo "=== Debug: Git Status ==="
           git status
@@ -147,12 +136,9 @@ jobs:
           echo "=== Debug: Git Status after commit ==="
           git status
           
-          # Push changes
+          # Push changes using the token from checkout action
           echo "Attempting to push to branch: ${BRANCH_NAME}"
-          git push --set-upstream origin "${BRANCH_NAME}"
-          
-          # Cleanup credentials
-          rm -f ~/.git-credentials
+          git push origin "${BRANCH_NAME}"
           
           # Create PR using GitHub CLI if needed
           # gh pr create --title "Update API Documentation" --body "Automated API documentation update" 
