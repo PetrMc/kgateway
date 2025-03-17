@@ -12,10 +12,10 @@ on:
 jobs:
   generate-api-docs:
     runs-on: ubuntu-latest
-    # Scope permissions to this specific job
     permissions:
       contents: write  # for creating/updating files
       pull-requests: write  # for creating pull requests
+      id-token: write  # for cross-repo access
     
     steps:
       - name: Checkout kgateway repository
@@ -110,7 +110,7 @@ jobs:
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
           path: kgateway.dev-docs
           commit-message: "docs: Update API documentation"
           title: "Update API Documentation"
