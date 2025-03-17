@@ -9,6 +9,9 @@ on:
   #   branches:
   #     - main
 
+# Add top-level permissions for cross-repo access
+permissions: read-all
+
 jobs:
   generate-api-docs:
     runs-on: ubuntu-latest
