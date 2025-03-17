@@ -10,9 +10,10 @@ on:
   #     - main
 
 permissions:
-  contents: write  # for creating/updating files
-  pull-requests: write  # for creating pull requests
-  id-token: write  # for cross-repo access
+  contents: write      # for creating/updating files
+  pull-requests: write # for creating pull requests
+  actions: write       # for cross-repo access
+  id-token: write     # for cross-repo access
 
 jobs:
   generate-api-docs:
