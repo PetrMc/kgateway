@@ -9,11 +9,7 @@ on:
   #   branches:
   #     - main
 
-permissions:
-  contents: write      # for creating/updating files
-  pull-requests: write # for creating pull requests
-  actions: write       # for cross-repo access
-  id-token: write     # for cross-repo access
+permissions: write-all
 
 jobs:
   generate-api-docs:
