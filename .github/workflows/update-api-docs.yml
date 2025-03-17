@@ -136,7 +136,18 @@ jobs:
           echo "=== Debug: Token Permissions for kgateway repo (current org) ==="
           curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository_owner }}/kgateway.dev-docs | jq '.permissions'
+            https://api.github.com/repos/${{ github.repository_owner }}/kgateway | jq '.permissions'
+
+          echo "=== Debug: Token Permissions for Docs fork (kgateway-dev org) ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/kgateway-dev/kgateway.dev-docs | jq '.permissions'
+
+
+          echo "=== Debug: Token Permissions for kgateway repo (kgateway-dev org) ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/kgateway-dev/kgateway | jq '.permissions'
           
           echo "=== Debug: Git Configuration ==="
           git config --list
@@ -160,6 +171,7 @@ jobs:
           branch-suffix: timestamp
           delete-branch: true
           base: main  # branch to create PR against
+          repository: kgateway-dev/kgateway.dev-docs  # explicit org/repo reference
           labels: |
             documentation
             automated pr
