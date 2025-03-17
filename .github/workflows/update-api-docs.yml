@@ -9,16 +9,14 @@ on:
   #   branches:
   #     - main
 
-# Add top-level permissions for cross-repo access
-permissions: read-all
+permissions:
+  contents: write  # for creating/updating files
+  pull-requests: write  # for creating pull requests
+  id-token: write  # for cross-repo access
 
 jobs:
   generate-api-docs:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # for creating/updating files
-      pull-requests: write  # for creating pull requests
-      id-token: write  # for cross-repo access
     
     steps:
       - name: Checkout kgateway repository
