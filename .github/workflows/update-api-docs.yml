@@ -9,6 +9,9 @@ on:
   #   branches:
   #     - main
 
+env:
+  GH_ORG: ghcr.io/${{ github.repository_owner }}
+
 jobs:
   generate-api-docs:
     runs-on: ubuntu-latest
@@ -21,13 +24,13 @@ jobs:
       - name: Checkout kgateway repository
         uses: actions/checkout@v4
         with:
-          repository: PetrMc/kgateway
+          repository: ${{ github.repository_owner }}/kgateway
           path: kgateway
 
       - name: Checkout docs repository
         uses: actions/checkout@v4
         with:
-          repository: PetrMc/kgateway.dev-docs
+          repository: ${{ github.repository_owner }}/kgateway.dev-docs
           path: kgateway.dev-docs
           fetch-depth: 0
 
@@ -106,6 +109,41 @@ jobs:
             /^\s*$/d
           }' content/docs/reference/api/top-level/_index.md
           sed -i '/```yaml/,/```/{ /^```/! { s/\t/  /g; /^\s*$/d } }' content/docs/reference/api/top-level/_index.md
+      - name: Debug Permissions
+        run: |
+          echo "=== Debug: Repository Information ==="
+          echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
+          echo "GITHUB_ACTOR: $GITHUB_ACTOR"
+          echo "GITHUB_REF: $GITHUB_REF"
+          
+          echo "=== Debug: Token Permissions for Docs fork ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/PetrMc/kgateway.dev-docs | jq '.permissions'
+
+          echo "=== Debug: Token Permissions for kgateway repo ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/PetrMc/kgateway | jq '.permissions'            
+
+
+          echo "=== Debug: Token Permissions for Docs fork (current org) ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository_owner }}/kgateway.dev-docs | jq '.permissions'
+
+
+          echo "=== Debug: Token Permissions for kgateway repo (current org) ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository_owner }}/kgateway.dev-docs | jq '.permissions'
+          
+          echo "=== Debug: Git Configuration ==="
+          git config --list
+          
+          echo "=== Debug: Remote URLs ==="
+          cd kgateway.dev-docs
+          git remote -v
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
