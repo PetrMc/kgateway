@@ -1,0 +1,178 @@
+name: Update API Documentation
+
+on:
+  workflow_dispatch:  # Allow manual triggers for now
+  # Later we can add:
+  # push:
+  #   paths:
+  #     - 'api/v1alpha1/**'
+  #   branches:
+  #     - main
+
+env:
+  GH_ORG: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  generate-api-docs:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout kgateway repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/kgateway
+          path: kgateway
+
+      - name: Checkout docs repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/kgateway.dev-docs
+          path: kgateway.dev-docs
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+
+      - name: Generate API Reference
+        run: |
+          echo "=== Debug: Starting Generate API Reference ==="
+          echo "Current directory: $PWD"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "Listing GITHUB_WORKSPACE contents:"
+          ls -la $GITHUB_WORKSPACE
+          
+          TMPDIR=$(mktemp -d)
+          echo "Created temp directory: $TMPDIR"
+          cd $TMPDIR
+          echo "Changed to temp directory: $PWD"
+
+          echo "=== Debug: Before generating docs ==="
+          echo "Looking for API directory:"
+          ls -la "$GITHUB_WORKSPACE/kgateway/api/v1alpha1/" || echo "API directory not found!"
+
+          # Generate docs using crd-ref-docs
+          go run github.com/elastic/crd-ref-docs@v0.1.0 \
+            --source-path="$GITHUB_WORKSPACE/kgateway/api/v1alpha1/" \
+            --renderer=markdown \
+            --output-path ./ \
+            --config=<(echo 'processor:
+              ignoreTypes:
+                - ".*List$"
+            render:
+              kubernetesVersion: 1.33')
+
+          echo "=== Debug: After generating docs ==="
+          echo "Temp directory contents:"
+          ls -la .
+          
+          echo "=== Debug: Before updating docs repository ==="
+          echo "Checking docs repository path:"
+          ls -la "$GITHUB_WORKSPACE/kgateway.dev-docs" || echo "Docs repository not found!"
+
+          # Update docs repository
+          cd "$GITHUB_WORKSPACE/kgateway.dev-docs"
+          echo "Changed to docs repository: $PWD"
+          rm -rf content/docs/reference/api/top-level/
+          mkdir -p content/docs/reference/api/top-level/
+          
+          # Create index file with frontmatter
+          (echo '---
+          title: Top-level APIs
+          weight: 10
+          ---
+          
+          '; cat "$TMPDIR/out.md") > content/docs/reference/api/top-level/_index.md
+          
+          echo "=== Debug: After creating index file ==="
+          echo "Content directory structure:"
+          ls -la content/docs/reference/api/top-level/
+
+          # Format generated docs
+          sed -i 's/Required: \\{\\}/Required/g; s/Optional: \\{\\}/Optional/g' content/docs/reference/api/top-level/_index.md
+          sed -i '
+          /```yaml<br \/>/ {
+            s/```yaml<br \/>//
+            s/<br \/>$//
+            /^$/d
+            s/stats:<br \/>/stats:<br \/>/
+            s/  customLabels:<br \/>/\&nbsp;\&nbsp;customLabels:<br \/>/
+            s/    - name:/\&nbsp;\&nbsp;\&nbsp;\&nbsp;- name:/g
+            s/      metadataNamespace:/\&nbsp;\&nbsp;\&nbsp;\&nbsp;\&nbsp;\&nbsp;metadataNamespace:/g
+            s/      metadataKey:/\&nbsp;\&nbsp;\&nbsp;\&nbsp;\&nbsp;\&nbsp;metadataKey:/g
+            s/```//
+            /^\s*$/d
+          }' content/docs/reference/api/top-level/_index.md
+          sed -i '/```yaml/,/```/{ /^```/! { s/\t/  /g; /^\s*$/d } }' content/docs/reference/api/top-level/_index.md
+      - name: Debug Permissions
+        run: |
+          echo "=== Debug: Repository Information ==="
+          echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
+          echo "GITHUB_ACTOR: $GITHUB_ACTOR"
+          echo "GITHUB_REF: $GITHUB_REF"
+          
+          echo "=== Debug: Token Permissions for Docs fork ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/PetrMc/kgateway.dev-docs | jq '.permissions'
+
+          echo "=== Debug: Token Permissions for kgateway repo ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/PetrMc/kgateway | jq '.permissions'            
+
+
+          echo "=== Debug: Token Permissions for Docs fork (current org) ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository_owner }}/kgateway.dev-docs | jq '.permissions'
+
+
+          echo "=== Debug: Token Permissions for kgateway repo (current org) ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository_owner }}/kgateway | jq '.permissions'
+
+          echo "=== Debug: Token Permissions for Docs fork (kgateway-dev org) ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/kgateway-dev/kgateway.dev-docs | jq '.permissions'
+
+
+          echo "=== Debug: Token Permissions for kgateway repo (kgateway-dev org) ==="
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/kgateway-dev/kgateway | jq '.permissions'
+          
+          echo "=== Debug: Git Configuration ==="
+          git config --list
+          
+          echo "=== Debug: Remote URLs ==="
+          cd kgateway.dev-docs
+          git remote -v
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: kgateway.dev-docs
+          commit-message: "docs: Update API documentation"
+          title: "Update API Documentation"
+          body: |
+            Automated API documentation update generated on $(date '+%B %d, %Y at %H:%M')
+            
+            This PR was automatically generated by the API documentation workflow.
+          branch: api-gen-update
+          branch-suffix: timestamp
+          delete-branch: true
+          base: main  # branch to create PR against
+          repository: kgateway-dev/kgateway.dev-docs  # explicit org/repo reference
+          labels: |
+            documentation
+            automated pr
+ 
