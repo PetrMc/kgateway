@@ -1,0 +1,59 @@
+name: Cluster2
+# This workflow runs cluster-two tests
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to test'
+        required: true
+        default: 'main'
+        type: string
+
+env:
+  VERSION: '1.0.0-ci1'
+  GITHUB_TOKEN: ${{ github.token }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          check-latest: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Install kind
+        uses: helm/kind-action@v1.8.0
+
+      - name: Create cluster
+        run: |
+          kind create cluster --name cluster-two --config test/kubernetes/e2e/kind-config.yaml
+
+      - name: Load images
+        run: |
+          kind load docker-image kgateway-crds:${{ env.VERSION }} --name cluster-two
+          kind load docker-image kgateway:${{ env.VERSION }} --name cluster-two
+
+      - name: Install kgateway
+        run: |
+          helm install kgateway-crds _test/kgateway-${{ env.VERSION }}.tgz -n kgateway-waypoint-test
+          helm install kgateway _test/kgateway-${{ env.VERSION }}.tgz -n kgateway-waypoint-test
+
+      - name: Run tests
+        run: |
+          go test -v -timeout=25m ./test/kubernetes/e2e/... -run "^TestKgateway$$/^Backends$$|^TestKgateway$$/^TCPRouteServices$$|^TestKgateway$$/^Transforms$$|^TestKgateway$$/^BackendTLSPolicies$$|^TestKgatewayWaypoint$$" 
