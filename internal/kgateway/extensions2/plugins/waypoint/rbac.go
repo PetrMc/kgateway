@@ -1,6 +1,9 @@
 package waypoint
 
 import (
+	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/waypoint/waypointquery"
+	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
+	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/filters"
 	"google.golang.org/protobuf/types/known/anypb"
 	"istio.io/api/label"
 	authpb "istio.io/api/security/v1"
@@ -11,10 +14,6 @@ import (
 	"istio.io/istio/pilot/pkg/security/trustdomain"
 	"istio.io/istio/pkg/config/schema/gvk"
 	gwapi "sigs.k8s.io/gateway-api/apis/v1"
-
-	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/waypoint/waypointquery"
-	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
-	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/filters"
 
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/ir"
 )

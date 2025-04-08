@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	authcr "istio.io/client-go/pkg/apis/security/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,7 +25,6 @@ import (
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/stringutils"
 
-	istiosecurity "istio.io/client-go/pkg/apis/security/v1"
 	"istio.io/istio/pkg/kube/krt"
 	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/util/sets"
@@ -83,8 +83,9 @@ func (w *waypointTranslator) Translate(
 	for _, hr := range routes {
 		attachedRoutes.Insert(namespacedName(hr))
 	}
-
-	authzPolicies := w.waypointQueries.GetAuthorizationPolicies(kctx, ctx, gateway.Namespace, RootNamespace)
+	// Previous implementation that fetches everything
+	// 	authzPolicies := w.waypointQueries.GetAuthorizationPolicies(kctx, ctx, gateway.Namespace, RootNamespace)
+	authzPolicies := w.waypointQueries.GetAuthorizationPoliciesForGateway(kctx, ctx, gateway.Obj, RootNamespace)
 	waypointFor := waypointquery.GetWaypointFor(gateway.Obj)
 
 	if waypointFor.ForService() {
@@ -239,7 +240,7 @@ func (t *waypointTranslator) buildServiceChains(
 	gwRoutes []*query.RouteInfo,
 	gwListener *ir.Listener,
 	attachedRoutes sets.Set[types.NamespacedName],
-	authzPolicies []*istiosecurity.AuthorizationPolicy,
+	authzPolicies []*authcr.AuthorizationPolicy,
 ) ([]ir.HttpFilterChainIR, []ir.TcpIR) {
 	var httpOut []ir.HttpFilterChainIR
 	var tcpOut []ir.TcpIR
