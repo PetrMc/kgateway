@@ -40,9 +40,6 @@ type WaypointQueries interface {
 	// GetHTTPRoutesForService fetches HTTPRoutes that have the given Service in parentRefs.
 	GetHTTPRoutesForService(kctx krt.HandlerContext, ctx context.Context, svc *Service) []query.RouteInfo
 
-	// GetAuthorizationPolicies gets a filtered list of policies in the namespaces that also target services in the targetNamespace
-	GetAuthorizationPolicies(kctx krt.HandlerContext, ctx context.Context, targetNamespace, rootNamespace string) []*authcr.AuthorizationPolicy
-
 	// GetAuthorizationPoliciesForGateway returns policies targeting a specific gateway
 	GetAuthorizationPoliciesForGateway(kctx krt.HandlerContext, ctx context.Context, gateway *gwv1.Gateway, rootNamespace string) []*authcr.AuthorizationPolicy
 
@@ -81,6 +78,15 @@ func NewQueries(
 	}
 }
 
+// This is based on the current Istio AuthorizationPolicy docs (TargetRef section)
+// https://istio.io/latest/docs/reference/config/security/authorization-policy/#TargetRef
+
+// Currently, the following resource attachment types are supported:
+// kind: Gateway with group: gateway.networking.k8s.io in the same namespace.
+// kind: GatewayClass with group: gateway.networking.k8s.io in the root namespace.
+// kind: Service with group: "" or group: "core" in the same namespace. This type is only supported for waypoints.
+// kind: ServiceEntry with group: networking.istio.io in the same namespace.
+
 // buildServiceTargetIndex creates an index of policies by service target
 func buildServiceTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy]) krt.Index[ServiceTargetKey, *authcr.AuthorizationPolicy] {
 	return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []ServiceTargetKey {
@@ -110,23 +116,29 @@ func buildServiceTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy
 
 // buildGatewayTargetIndex creates an index of policies by gateway target
 func buildGatewayTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy]) krt.Index[GatewayTargetKey, *authcr.AuthorizationPolicy] {
-	return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []GatewayTargetKey {
-		var keys []GatewayTargetKey
+    return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []GatewayTargetKey {
+        var keys []GatewayTargetKey
 
-		for _, targetRef := range p.Spec.GetTargetRefs() {
-			if targetRef.GetKind() == "Gateway" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
-				key := GatewayTargetKey{
-					Name:      targetRef.GetName(),
-					Namespace: getEffectiveNamespace(targetRef.GetNamespace(), p.GetNamespace()),
-					Group:     targetRef.GetGroup(),
-					Kind:      targetRef.GetKind(),
-				}
-				keys = append(keys, key)
-			}
-		}
+        for _, targetRef := range p.Spec.GetTargetRefs() {
+            if targetRef.GetKind() == "Gateway" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
+                keys = append(keys, GatewayTargetKey{
+                    Name:      targetRef.GetName(),
+                    Namespace: getEffectiveNamespace(targetRef.GetNamespace(), p.GetNamespace()),
+                    Group:     targetRef.GetGroup(),
+                    Kind:      targetRef.GetKind(),
+                })
+            } else if targetRef.GetKind() == "GatewayClass" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
+                keys = append(keys, GatewayTargetKey{
+                    Name:      targetRef.GetName(),
+                    Namespace: "", // GatewayClass is cluster-scoped
+                    Group:     targetRef.GetGroup(),
+                    Kind:      targetRef.GetKind(),
+                })
+            }
+        }
 
-		return keys
-	})
+        return keys
+    })
 }
 
 // Helper function for determining effective namespace

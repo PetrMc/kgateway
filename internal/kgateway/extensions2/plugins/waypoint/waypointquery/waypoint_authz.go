@@ -24,45 +24,6 @@ type GatewayTargetKey struct {
 	Kind      string
 }
 
-// GetAuthorizationPoliciesForService returns policies targeting a specific service
-func (w *waypointQueries) GetAuthorizationPoliciesForService(
-	kctx krt.HandlerContext,
-	ctx context.Context,
-	service *Service,
-	rootNamespace string) []*authcr.AuthorizationPolicy {
-
-	// Get policies directly targeting this service
-	key := ServiceTargetKey{
-		Name:      service.GetName(),
-		Namespace: service.GetNamespace(),
-		Provider:  service.Provider(),
-	}
-
-	directPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byServiceTarget, key))
-
-	// Get namespace-wide policies (no targetRefs)
-	var namespacePolicies []*authcr.AuthorizationPolicy
-	allNamespacePolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byNamespace, service.GetNamespace()))
-	for _, p := range allNamespacePolicies {
-		if len(p.Spec.GetTargetRefs()) == 0 {
-			namespacePolicies = append(namespacePolicies, p)
-		}
-	}
-
-	// Combine results
-	policies := append(directPolicies, namespacePolicies...)
-
-	// Add relevant root namespace policies
-	if rootNamespace != "" && rootNamespace != service.GetNamespace() {
-		// Get policies from root namespace that target this service
-		// Reuse the same key since we're targeting the same service
-		rootPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byServiceTarget, key))
-		policies = append(policies, rootPolicies...)
-	}
-
-	return policies
-}
-
 // GetAuthorizationPoliciesForGateway returns policies targeting a specific gateway
 func (w *waypointQueries) GetAuthorizationPoliciesForGateway(
 	kctx krt.HandlerContext,
@@ -95,31 +56,4 @@ func (w *waypointQueries) GetAuthorizationPoliciesForGateway(
 	// Let the existing matcher & RBAC builder handle filtering
 	// Don't attempt to reimplement the filtering logic here
 	return allPolicies
-}
-
-func (w *waypointQueries) GetAuthorizationPolicies(kctx krt.HandlerContext, ctx context.Context, targetNamespace, rootNamespace string) []*authcr.AuthorizationPolicy {
-	// Get all policies in the target namespace
-	policies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byNamespace, targetNamespace))
-
-	// Get all policies in the root namespace
-	if rootNamespace != "" && rootNamespace != targetNamespace {
-		rootPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byNamespace, rootNamespace))
-		policies = append(policies, rootPolicies...)
-	}
-
-	// Filter policies to only include those targeting services in the target namespace
-	filteredPolicies := make([]*authcr.AuthorizationPolicy, 0, len(policies))
-	for _, policy := range policies {
-		for _, targetRef := range policy.Spec.GetTargetRefs() {
-			if targetRef.GetKind() == "Service" && targetRef.GetGroup() == "" {
-				// If the policy targets a service in the target namespace, include it
-				targetNamespaceMatches := targetRef.GetNamespace() == "" || targetRef.GetNamespace() == targetNamespace
-				if targetNamespaceMatches {
-					filteredPolicies = append(filteredPolicies, policy)
-					break
-				}
-			}
-		}
-	}
-	return filteredPolicies
 }
