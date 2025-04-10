@@ -1,0 +1,14 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: authz-gateway-ref
+spec:
+  action: DENY
+  rules:
+  - to:
+    - operation:
+        methods: ["GET"]
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: test-waypoint

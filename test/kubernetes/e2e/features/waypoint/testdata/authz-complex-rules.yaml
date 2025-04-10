@@ -1,0 +1,18 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: authz-complex-rules
+spec:
+  action: DENY
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/waypoint-test-ns/sa/notcurl"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+        paths: ["/admin/*"]
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: svc-a

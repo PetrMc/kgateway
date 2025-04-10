@@ -2,11 +2,12 @@ package waypointquery
 
 import (
 	"context"
+	"fmt"
 
+	authcr "istio.io/client-go/pkg/apis/security/v1"
 	"istio.io/istio/pilot/pkg/serviceregistry/provider"
 	"istio.io/istio/pkg/kube/krt"
 	gwapi "sigs.k8s.io/gateway-api/apis/v1"
-	authcr "istio.io/client-go/pkg/apis/security/v1"
 )
 
 // ServiceTargetKey identifies a service that policies can target
@@ -16,12 +17,20 @@ type ServiceTargetKey struct {
 	Provider  provider.ID
 }
 
+func (k GatewayTargetKey) String() string {
+	return fmt.Sprintf("%s/%s/%s/%s", k.Group, k.Kind, k.Namespace, k.Name)
+}
+
 // GatewayTargetKey identifies a gateway that policies can target
 type GatewayTargetKey struct {
 	Name      string
 	Namespace string
 	Group     string
 	Kind      string
+}
+
+func (k ServiceTargetKey) String() string {
+	return fmt.Sprintf("%s/%s/%v", k.Namespace, k.Name, k.Provider)
 }
 
 // GetAuthorizationPoliciesForGateway returns policies targeting a specific gateway

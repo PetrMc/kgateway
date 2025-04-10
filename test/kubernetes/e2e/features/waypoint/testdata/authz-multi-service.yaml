@@ -1,0 +1,18 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: authz-multi-service
+spec:
+  action: DENY
+  rules:
+  - to:
+    - operation:
+        methods: ["GET"]
+        ports: ["8080"]
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: svc-a
+  - group: ""
+    kind: Service
+    name: svc-b
