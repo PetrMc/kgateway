@@ -28,11 +28,6 @@ var (
 		Body: gstruct.Ignore(),
 	}
 
-	isOK = matchers.HttpResponse{
-		StatusCode: http.StatusOK,
-		Body:       gstruct.Ignore(),
-	}
-
 	// Response is forbidden
 	isForbidden = matchers.HttpResponse{
 		StatusCode: http.StatusForbidden,
@@ -76,22 +71,7 @@ func (s *testingSuite) TestGatewayHTTPRoute() {
 	s.assertCurlService(fromCurl, "svc-b", testNamespace, hasHTTPRoute)
 }
 
-func (s *testingSuite) TestAuthorizationPolicies() {
-	s.T().Run("ComplexRules", func(t *testing.T) {
-		s.runAuthzComplexRule(t)
-	})
-	s.T().Run("GatewayAttached", func(t *testing.T) {
-		s.runAuthzGatewayAttached()
-	})
-	s.T().Run("NamespaceWide", func(t *testing.T) {
-		s.runAuthzNamespaceWide()
-	})
-	s.T().Run("MultiService", func(t *testing.T) {
-		s.runAuthzMultiService()
-	})
-}
-
-func (s *testingSuite) runAuthzGatewayAttached() {
+func (s *testingSuite) TestAuthzGatewayAttached() {
 	s.setNamespaceWaypointOrFail(testNamespace)
 	s.applyOrFail("authz-l7.yaml", testNamespace)
 
@@ -104,7 +84,7 @@ func (s *testingSuite) runAuthzGatewayAttached() {
 	s.assertCurlService(fromNotCurl, "svc-b", testNamespace, isForbidden)
 }
 
-func (s *testingSuite) runAuthzNamespaceWide() {
+func (s *testingSuite) TestAuthzNamespaceWide() {
 	s.setNamespaceWaypointOrFail(testNamespace)
 	s.applyOrFail("authz-gateway-ref.yaml", testNamespace)
 
@@ -123,7 +103,7 @@ func (s *testingSuite) runAuthzNamespaceWide() {
 	s.assertCurlServicePost(fromNotCurl, "svc-b", testNamespace, hasEnvoy)
 }
 
-func (s *testingSuite) runAuthzMultiService() {
+func (s *testingSuite) TestAuthzMultiService() {
 	s.setNamespaceWaypointOrFail(testNamespace)
 	s.applyOrFail("authz-multi-service.yaml", testNamespace)
 
@@ -142,7 +122,7 @@ func (s *testingSuite) runAuthzMultiService() {
 	s.assertCurlServicePost(fromNotCurl, "svc-b", testNamespace, hasEnvoy)
 }
 
-func (s *testingSuite) runAuthzComplexRule(t *testing.T) {
+func (s *testingSuite) TestAuthzComplexRule() {
 	s.setNamespaceWaypointOrFail(testNamespace)
 	s.applyOrFail("authz-complex-rules.yaml", testNamespace)
 
@@ -174,11 +154,31 @@ func (s *testingSuite) runAuthzComplexRule(t *testing.T) {
 						expected = isForbidden
 					}
 
-					t.Run(key, func(t *testing.T) {
+					s.T().Run(key, func(t *testing.T) {
 						s.assertCurlGeneric(from.opts, svc, method, path, expected)
 					})
 				}
 			}
 		}
 	}
+}
+
+func (s *testingSuite) TestAuthzServiceEntry() {
+	s.setNamespaceWaypointOrFail(testNamespace)
+	s.applyOrFail("authz-serviceentry.yaml", testNamespace)
+
+	// ensure waypoint attachment, and all requests fromCurl succeed
+	s.assertCurlHost(fromCurl, "se-a.serviceentry.com", hasEnvoy)
+	s.assertCurlHost(fromCurl, "se-b.serviceentry.com", isForbidden)
+
+	// ensure authz is only applied to svc-a
+	s.assertCurlHost(fromNotCurl, "se-a.serviceentry.com", hasEnvoy)
+	s.assertCurlHost(fromNotCurl, "se-b.serviceentry.com", isForbidden)
+
+	// POST should be allowed
+	s.assertCurlHostPost(fromCurl, "se-a.serviceentry.com", hasEnvoy)
+	s.assertCurlHostPost(fromCurl, "se-b.serviceentry.com", hasEnvoy)
+	s.assertCurlHostPost(fromNotCurl, "se-a.serviceentry.com", hasEnvoy)
+	s.assertCurlHostPost(fromNotCurl, "se-b.serviceentry.com", hasEnvoy)
+
 }

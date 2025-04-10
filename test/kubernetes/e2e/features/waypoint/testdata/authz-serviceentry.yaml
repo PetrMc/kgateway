@@ -1,0 +1,16 @@
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: authz-serviceentry
+spec:
+  action: DENY
+  rules:
+  - to:
+    - operation:
+        methods: ["GET"]
+        ports: ["8080"]
+  targetRefs:
+  - group: networking.istio.io
+    kind: ServiceEntry
+    name: se-b

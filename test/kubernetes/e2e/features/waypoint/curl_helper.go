@@ -50,6 +50,15 @@ func (s *testingSuite) assertCurlHost(
 	s.assertCurlInner(from, targetHost, matchers, "", "GET", path...)
 }
 
+func (s *testingSuite) assertCurlHostPost(
+	from kubectl.PodExecOptions,
+	targetHost string,
+	matchers matchers.HttpResponse,
+	path ...string,
+) {
+	s.assertCurlInner(from, targetHost, matchers, "", "POST", path...)
+}
+
 func (s *testingSuite) assertCurlInner(
 	from kubectl.PodExecOptions,
 	targetHost string,
