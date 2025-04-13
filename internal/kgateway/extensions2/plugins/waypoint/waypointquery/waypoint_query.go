@@ -43,6 +43,9 @@ type WaypointQueries interface {
 	// GetAuthorizationPoliciesForGateway returns policies targeting a specific gateway
 	GetAuthorizationPoliciesForGateway(kctx krt.HandlerContext, ctx context.Context, gateway *gwv1.Gateway, rootNamespace string) []*authcr.AuthorizationPolicy
 
+	// GetAuthorizationPoliciesForService returns policies targeting a specific service
+	GetAuthorizationPoliciesForService(kctx krt.HandlerContext, ctx context.Context, svc *Service) []*authcr.AuthorizationPolicy
+
 	HasSynced() bool
 }
 
@@ -116,29 +119,29 @@ func buildServiceTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy
 
 // buildGatewayTargetIndex creates an index of policies by gateway target
 func buildGatewayTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy]) krt.Index[GatewayTargetKey, *authcr.AuthorizationPolicy] {
-    return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []GatewayTargetKey {
-        var keys []GatewayTargetKey
+	return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []GatewayTargetKey {
+		var keys []GatewayTargetKey
 
-        for _, targetRef := range p.Spec.GetTargetRefs() {
-            if targetRef.GetKind() == "Gateway" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
-                keys = append(keys, GatewayTargetKey{
-                    Name:      targetRef.GetName(),
-                    Namespace: getEffectiveNamespace(targetRef.GetNamespace(), p.GetNamespace()),
-                    Group:     targetRef.GetGroup(),
-                    Kind:      targetRef.GetKind(),
-                })
-            } else if targetRef.GetKind() == "GatewayClass" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
-                keys = append(keys, GatewayTargetKey{
-                    Name:      targetRef.GetName(),
-                    Namespace: "", // GatewayClass is cluster-scoped
-                    Group:     targetRef.GetGroup(),
-                    Kind:      targetRef.GetKind(),
-                })
-            }
-        }
+		for _, targetRef := range p.Spec.GetTargetRefs() {
+			if targetRef.GetKind() == "Gateway" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
+				keys = append(keys, GatewayTargetKey{
+					Name:      targetRef.GetName(),
+					Namespace: getEffectiveNamespace(targetRef.GetNamespace(), p.GetNamespace()),
+					Group:     targetRef.GetGroup(),
+					Kind:      targetRef.GetKind(),
+				})
+			} else if targetRef.GetKind() == "GatewayClass" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
+				keys = append(keys, GatewayTargetKey{
+					Name:      targetRef.GetName(),
+					Namespace: "", // GatewayClass is cluster-scoped
+					Group:     targetRef.GetGroup(),
+					Kind:      targetRef.GetKind(),
+				})
+			}
+		}
 
-        return keys
-    })
+		return keys
+	})
 }
 
 // Helper function for determining effective namespace

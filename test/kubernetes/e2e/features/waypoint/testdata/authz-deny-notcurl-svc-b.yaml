@@ -5,7 +5,7 @@
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: authz-l7-deny-notcurl-svc-b
+  name: authz-deny-notcurl-svc-b
 spec:
   action: DENY
   rules:

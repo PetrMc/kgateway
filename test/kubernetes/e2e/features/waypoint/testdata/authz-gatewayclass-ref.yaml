@@ -1,0 +1,12 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: authz-gatewayclass-ref
+  namespace: istio-system
+spec:
+  action: DENY
+  rules: []
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: GatewayClass
+    name: kgateway-waypoint

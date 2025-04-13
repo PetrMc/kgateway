@@ -71,9 +71,9 @@ func (s *testingSuite) TestGatewayHTTPRoute() {
 	s.assertCurlService(fromCurl, "svc-b", testNamespace, hasHTTPRoute)
 }
 
-func (s *testingSuite) TestAuthzGatewayAttached() {
+func (s *testingSuite) TestAuthzNoCurlSvcB() {
 	s.setNamespaceWaypointOrFail(testNamespace)
-	s.applyOrFail("authz-l7.yaml", testNamespace)
+	s.applyOrFail("authz-deny-notcurl-svc-b.yaml", testNamespace)
 
 	// ensure waypoint attachment, and all requests fromCurl succeed
 	s.assertCurlService(fromCurl, "svc-a", testNamespace, hasEnvoy)
@@ -84,9 +84,9 @@ func (s *testingSuite) TestAuthzGatewayAttached() {
 	s.assertCurlService(fromNotCurl, "svc-b", testNamespace, isForbidden)
 }
 
-func (s *testingSuite) TestAuthzNamespaceWide() {
+func (s *testingSuite) TestAuthzGatewayClassRef() {
 	s.setNamespaceWaypointOrFail(testNamespace)
-	s.applyOrFail("authz-gateway-ref.yaml", testNamespace)
+	s.applyOrFail("authz-gatewayclass-ref.yaml", testNamespace)
 
 	// Verify waypoint attachment
 	s.assertCurlService(fromCurl, "svc-a", testNamespace, isForbidden)
@@ -96,11 +96,22 @@ func (s *testingSuite) TestAuthzNamespaceWide() {
 	s.assertCurlService(fromNotCurl, "svc-a", testNamespace, isForbidden)
 	s.assertCurlService(fromNotCurl, "svc-b", testNamespace, isForbidden)
 
-	// repeat with POST (should be allowed)
-	s.assertCurlServicePost(fromCurl, "svc-a", testNamespace, hasEnvoy)
-	s.assertCurlServicePost(fromCurl, "svc-b", testNamespace, hasEnvoy)
-	s.assertCurlServicePost(fromNotCurl, "svc-a", testNamespace, hasEnvoy)
-	s.assertCurlServicePost(fromNotCurl, "svc-b", testNamespace, hasEnvoy)
+}
+
+
+func (s *testingSuite) TestAuthzGatewayRef() {
+	s.setNamespaceWaypointOrFail(testNamespace)
+	s.applyOrFail("authz-gateway-ref.yaml", testNamespace)
+	s.applyOrFail("authz-complex-rules.yaml", testNamespace)
+
+	// Verify waypoint attachment
+	s.assertCurlService(fromCurl, "svc-a", testNamespace, isForbidden)
+	s.assertCurlService(fromCurl, "svc-b", testNamespace, isForbidden)
+
+	// Verify that policy applies to all services for notcurl
+	s.assertCurlService(fromNotCurl, "svc-a", testNamespace, isForbidden)
+	s.assertCurlService(fromNotCurl, "svc-b", testNamespace, isForbidden)
+
 }
 
 func (s *testingSuite) TestAuthzMultiService() {

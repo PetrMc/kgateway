@@ -257,8 +257,24 @@ func (t *waypointTranslator) buildServiceChains(
 	// For TCP:
 	// * Just forward traffic
 	// * TODO TCPRoute
+	GWAauthzPolicies := t.waypointQueries.GetAuthorizationPoliciesForGateway(
+		kctx,
+		ctx,
+		gw.Obj,
+		RootNamespace,
+	)
 	for _, svc := range services {
-		tcpRBAC, httpRBAC := BuildRBACForService(authzPolicies, gw.Obj, &svc)
+		serviceSpecificPolicies := t.waypointQueries.GetAuthorizationPoliciesForService(kctx, ctx, &svc)
+		
+		// Combine with gateway policies (which serve as namespace-wide policies)
+		combinedPolicies := append([](*authcr.AuthorizationPolicy){}, GWAauthzPolicies...)
+		combinedPolicies = append(combinedPolicies, serviceSpecificPolicies...)
+
+		fmt.Printf("Combined %d gateway policies with %d service-specific policies for %s/%s\n",
+			len(GWAauthzPolicies), len(serviceSpecificPolicies),
+			svc.GetNamespace(), svc.GetName())
+
+		tcpRBAC, httpRBAC := BuildRBACForService(combinedPolicies, gw.Obj, &svc)
 
 		// get Service-specific routes
 		httpRoutes := gwRoutes

@@ -17,10 +17,6 @@ type ServiceTargetKey struct {
 	Provider  provider.ID
 }
 
-func (k GatewayTargetKey) String() string {
-	return fmt.Sprintf("%s/%s/%s/%s", k.Group, k.Kind, k.Namespace, k.Name)
-}
-
 // GatewayTargetKey identifies a gateway that policies can target
 type GatewayTargetKey struct {
 	Name      string
@@ -33,6 +29,10 @@ func (k ServiceTargetKey) String() string {
 	return fmt.Sprintf("%s/%s/%v", k.Namespace, k.Name, k.Provider)
 }
 
+func (k GatewayTargetKey) String() string {
+	return fmt.Sprintf("%s/%s/%s/%s", k.Group, k.Kind, k.Namespace, k.Name)
+}
+
 // GetAuthorizationPoliciesForGateway returns policies targeting a specific gateway
 func (w *waypointQueries) GetAuthorizationPoliciesForGateway(
 	kctx krt.HandlerContext,
@@ -41,7 +41,7 @@ func (w *waypointQueries) GetAuthorizationPoliciesForGateway(
 	rootNamespace string) []*authcr.AuthorizationPolicy {
 
 	// Get policies targeting this gateway directly using the index
-	key := GatewayTargetKey{
+	gwKey := GatewayTargetKey{
 		Name:      gateway.GetName(),
 		Namespace: gateway.GetNamespace(),
 		Group:     "gateway.networking.k8s.io",
@@ -49,20 +49,39 @@ func (w *waypointQueries) GetAuthorizationPoliciesForGateway(
 	}
 
 	// Get all indexed policies targeting this gateway
-	gatewayPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byGatewayTarget, key))
-
-	// Get all policies from namespace and root namespace (same as existing method)
-	namespacePolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byNamespace, gateway.GetNamespace()))
-
-	allPolicies := append(gatewayPolicies, namespacePolicies...)
+	allPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byGatewayTarget, gwKey))
 
 	// Add root namespace policies if needed
 	if rootNamespace != "" && rootNamespace != gateway.GetNamespace() {
-		rootPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byNamespace, rootNamespace))
+		gwClassKey := GatewayTargetKey{
+			Name:      "kgateway-waypoint",
+			Namespace: rootNamespace,
+			Group:     "gateway.networking.k8s.io",
+			Kind:      "GatewayClass",
+		}
+		rootPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byGatewayTarget, gwClassKey))
 		allPolicies = append(allPolicies, rootPolicies...)
 	}
 
 	// Let the existing matcher & RBAC builder handle filtering
 	// Don't attempt to reimplement the filtering logic here
 	return allPolicies
+}
+
+// GetAuthorizationPoliciesForService returns policies targeting a specific service
+func (w *waypointQueries) GetAuthorizationPoliciesForService(
+	kctx krt.HandlerContext,
+	ctx context.Context,
+	svc *Service) []*authcr.AuthorizationPolicy {
+
+	providerID := svc.Provider()
+
+	svcKey := ServiceTargetKey{
+		Name:      svc.GetName(),
+		Namespace: svc.GetNamespace(),
+		Provider:  providerID,
+	}
+
+	svcPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byServiceTarget, svcKey))
+	return svcPolicies
 }
