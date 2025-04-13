@@ -47,10 +47,10 @@ func (w *waypointQueries) GetAuthorizationPoliciesForGateway(
 		Group:     "gateway.networking.k8s.io",
 		Kind:      "Gateway",
 	}
+	fmt.Printf("Looking up Gateway policies with key: %+v in the list of %d policies\n", gwKey, len(w.authzPolicies.List()))
 
 	// Get all indexed policies targeting this gateway
 	allPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byGatewayTarget, gwKey))
-
 	// Add root namespace policies if needed
 	if rootNamespace != "" && rootNamespace != gateway.GetNamespace() {
 		gwClassKey := GatewayTargetKey{
@@ -61,6 +61,11 @@ func (w *waypointQueries) GetAuthorizationPoliciesForGateway(
 		}
 		rootPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byGatewayTarget, gwClassKey))
 		allPolicies = append(allPolicies, rootPolicies...)
+	}
+	fmt.Printf("Found %d policies for Gateway with key %s\n", len(allPolicies), gwKey)
+	for i, p := range allPolicies {
+		fmt.Printf("  Policy %d: %s/%s (deletion: %v)\n", i,
+			p.GetNamespace(), p.GetName(), p.GetDeletionTimestamp() != nil)
 	}
 
 	// Let the existing matcher & RBAC builder handle filtering
@@ -83,5 +88,8 @@ func (w *waypointQueries) GetAuthorizationPoliciesForService(
 	}
 
 	svcPolicies := krt.Fetch(kctx, w.authzPolicies, krt.FilterIndex(w.byServiceTarget, svcKey))
+	fmt.Printf("Looking up Service policies with key: %+v in the list of %d policies\n", svcKey, len(w.authzPolicies.List()))
+	fmt.Printf("Found %d policies for service %s/%s for the key: %s\n",
+		len(svcPolicies), svc.GetNamespace(), svc.GetName(), svcKey)	
 	return svcPolicies
 }

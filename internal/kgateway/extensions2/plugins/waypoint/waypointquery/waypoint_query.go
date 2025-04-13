@@ -92,14 +92,20 @@ func NewQueries(
 
 // buildServiceTargetIndex creates an index of policies by service target
 func buildServiceTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy]) krt.Index[ServiceTargetKey, *authcr.AuthorizationPolicy] {
+	fmt.Printf("🚀 Creating service index with initial %d policies\n", len(policies.List()))
 	return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []ServiceTargetKey {
+		fmt.Printf("🔥 Service index function called for policy: %s/%s, targetRefs=%d\n",
+			p.GetNamespace(), p.GetName(), len(p.Spec.GetTargetRefs()))
 		var keys []ServiceTargetKey
 
-		for _, targetRef := range p.Spec.GetTargetRefs() {
+		for i, targetRef := range p.Spec.GetTargetRefs() {
+
 			isService := targetRef.GetKind() == "Service" &&
 				(targetRef.GetGroup() == "" || targetRef.GetGroup() == "core")
 			isServiceEntry := targetRef.GetKind() == "ServiceEntry" &&
 				targetRef.GetGroup() == "networking.istio.io"
+			fmt.Printf("  🔎 TargetRef[%d]: name=%q, namespace=%q (isService=%v, isServiceEntry=%v)\n",
+				i, targetRef.GetName(), targetRef.GetNamespace(), isService, isServiceEntry)
 
 			if isService || isServiceEntry {
 				providerID := Service{GroupKind: schema.GroupKind{Kind: targetRef.GetKind(), Group: targetRef.GetGroup()}}.Provider()
@@ -109,20 +115,34 @@ func buildServiceTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy
 					Namespace: getEffectiveNamespace(targetRef.GetNamespace(), p.GetNamespace()),
 					Provider:  providerID,
 				}
+				fmt.Printf("  ✅ Added Service key: %+v\n", key)
 				keys = append(keys, key)
+			} else {
+				fmt.Printf("  ⛔ Skipped: not Service/ServiceEntry in expected group\n")
 			}
-		}
 
+		}
+		fmt.Printf("  🗂️ Total keys added for %s/%s: %d\n", p.GetNamespace(), p.GetName(), len(keys))
+		fmt.Printf("📦 Keys for Service policy %s/%s:\n", p.GetNamespace(), p.GetName())
+		for _, k := range keys {
+			fmt.Printf("  🔑 Key: %s\n", k)
+		}
 		return keys
 	})
 }
 
 // buildGatewayTargetIndex creates an index of policies by gateway target
 func buildGatewayTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy]) krt.Index[GatewayTargetKey, *authcr.AuthorizationPolicy] {
+	fmt.Printf("🚀 Creating Gateway index with initial %d policies\n", len(policies.List()))
 	return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []GatewayTargetKey {
+		fmt.Printf("🔥 Gateway index function called for policy: %s/%s, targetRefs=%d\n",
+		p.GetNamespace(), p.GetName(), len(p.Spec.GetTargetRefs()))
+
 		var keys []GatewayTargetKey
 
-		for _, targetRef := range p.Spec.GetTargetRefs() {
+		for i, targetRef := range p.Spec.GetTargetRefs() {
+			fmt.Printf("  🔎 TargetRef[%d]: name=%q, namespace=%q (isGateway=%v, isGatewayClass=%v)\n",
+				i, targetRef.GetName(), targetRef.GetNamespace(), targetRef.GetKind() == "Gateway", targetRef.GetKind() == "GatewayClass")
 			if targetRef.GetKind() == "Gateway" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
 				keys = append(keys, GatewayTargetKey{
 					Name:      targetRef.GetName(),
@@ -130,6 +150,9 @@ func buildGatewayTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy
 					Group:     targetRef.GetGroup(),
 					Kind:      targetRef.GetKind(),
 				})
+				fmt.Printf("  ✅ Added Gateway key: %+v\n", keys[len(keys)-1])
+			
+			
 			} else if targetRef.GetKind() == "GatewayClass" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
 				keys = append(keys, GatewayTargetKey{
 					Name:      targetRef.GetName(),
@@ -137,6 +160,10 @@ func buildGatewayTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy
 					Group:     targetRef.GetGroup(),
 					Kind:      targetRef.GetKind(),
 				})
+				fmt.Printf("  ✅ Added GatewayClass key: %+v\n", keys[len(keys)-1])
+
+			} else {
+				fmt.Printf("  ⛔ Skipped: not Gateway or GatewayClass in correct group\n")
 			}
 		}
 
