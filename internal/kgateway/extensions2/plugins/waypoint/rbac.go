@@ -5,7 +5,6 @@ import (
 
 	"github.com/caarlos0/log"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/waypoint/waypointquery"
-	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/filters"
 	"google.golang.org/protobuf/types/known/anypb"
 	authpb "istio.io/api/security/v1"
@@ -25,21 +24,6 @@ const (
 	// This will allow users to customize the trust domain and its aliases for their cluster
 	defaultTrustDomain = "cluster.local"
 )
-
-var (
-	// RootNamespace is the namespace where Istio control plane components are installed.
-	// It is set during initialization via SetRootNamespace() which reads from settings.IstioNamespace.
-	// The default value is "istio-system" if not configured.
-	RootNamespace = "istio-system"
-)
-
-// SetRootNamespace sets the RootNamespace from settings.
-// This should be called during initialization.
-func SetRootNamespace(s *settings.Settings) {
-	if s != nil {
-		RootNamespace = s.IstioNamespace
-	}
-}
 
 // BuildRBACForService gives three lists of filters:
 // tcpRBAC - only used in tcp chains (using this on an HTTP chain could cause improper DENY)
@@ -102,7 +86,7 @@ func BuildRBACForService(
 	return tcpRBAC, httpRBAC
 }
 
-func applyHTTPRBACFilters(httpChain *ir.HttpFilterChainIR, httpRBAC []*ir.CustomEnvoyFilter, svc waypointquery.Service) {
+func applyHTTPRBACFilters(httpChain *ir.HttpFilterChainIR, httpRBAC []*ir.CustomEnvoyFilter) {
 	// Apply RBAC filters regardless of the presence of proxy_protocol_authority
 	if len(httpRBAC) > 0 {
 		// Initialize CustomHTTPFilters if it's nil

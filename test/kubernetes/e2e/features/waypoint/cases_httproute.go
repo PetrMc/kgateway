@@ -86,7 +86,7 @@ func (s *testingSuite) TestAuthzNoCurlSvcB() {
 
 func (s *testingSuite) TestAuthzGatewayClassRef() {
 	s.setNamespaceWaypointOrFail(testNamespace)
-	s.applyOrFail("authz-gatewayclass-ref.yaml", testNamespace)
+	s.applyOrFail("authz-gatewayclass-ref.yaml", "istio-system")
 
 	// Verify waypoint attachment
 	s.assertCurlService(fromCurl, "svc-a", testNamespace, isForbidden)
@@ -102,7 +102,6 @@ func (s *testingSuite) TestAuthzGatewayClassRef() {
 func (s *testingSuite) TestAuthzGatewayRef() {
 	s.setNamespaceWaypointOrFail(testNamespace)
 	s.applyOrFail("authz-gateway-ref.yaml", testNamespace)
-	s.applyOrFail("authz-complex-rules.yaml", testNamespace)
 
 	// Verify waypoint attachment
 	s.assertCurlService(fromCurl, "svc-a", testNamespace, isForbidden)

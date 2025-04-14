@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
+	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/ir"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/query"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
@@ -31,6 +32,21 @@ const (
 	// This allows cross-namespace waypoint references. If unset, the same namespace is assumed.
 	IstioUseWaypointNamespaceLabel = "istio.io/use-waypoint-namespace"
 )
+
+var (
+	// RootNamespace is the namespace where Istio control plane components are installed.
+	// It is set during initialization via SetRootNamespace() which reads from settings.IstioNamespace.
+	// The default value is "istio-system" if not configured.
+	RootNamespace = "istio-system"
+)
+
+// SetRootNamespace sets the RootNamespace from settings.
+// This should be called during initialization.
+func SetRootNamespace(s *settings.Settings) {
+	if s != nil {
+		RootNamespace = s.IstioNamespace
+	}
+}
 
 type WaypointQueries interface {
 	// GetWaypointServices returns all Services that are marked as using the Gateway
@@ -66,8 +82,7 @@ func NewQueries(
 	})
 
 	// Build service and gateway target indexes
-	byServiceTarget := buildServiceTargetIndex(authzPolicies)
-	byGatewayTarget := buildGatewayTargetIndex(authzPolicies)
+	byTargetRefKey := buildAuthzTargetIndex(authzPolicies)
 
 	return &waypointQueries{
 		queries:            gwQueries,
@@ -76,8 +91,7 @@ func NewQueries(
 		servicesByWaypoint: servicesByWaypoint,
 		authzPolicies:      authzPolicies,
 		byNamespace:        byNamespace,
-		byServiceTarget:    byServiceTarget,
-		byGatewayTarget:    byGatewayTarget,
+		byTargetRefKey:     byTargetRefKey,
 	}
 }
 
@@ -90,83 +104,51 @@ func NewQueries(
 // kind: Service with group: "" or group: "core" in the same namespace. This type is only supported for waypoints.
 // kind: ServiceEntry with group: networking.istio.io in the same namespace.
 
-// buildServiceTargetIndex creates an index of policies by service target
-func buildServiceTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy]) krt.Index[ServiceTargetKey, *authcr.AuthorizationPolicy] {
-	fmt.Printf("🚀 Creating service index with initial %d policies\n", len(policies.List()))
-	return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []ServiceTargetKey {
-		fmt.Printf("🔥 Service index function called for policy: %s/%s, targetRefs=%d\n",
+func buildAuthzTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy]) krt.Index[targetRefKey, *authcr.AuthorizationPolicy] {
+	fmt.Printf("🚀 Creating targetRefKey index with initial %d policies\n", len(policies.List()))
+	return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []targetRefKey {
+		fmt.Printf("🔥 Authz targetRefKey index function called for policy: %s/%s, targetRefs=%d\n",
 			p.GetNamespace(), p.GetName(), len(p.Spec.GetTargetRefs()))
-		var keys []ServiceTargetKey
-
-		for i, targetRef := range p.Spec.GetTargetRefs() {
-
-			isService := targetRef.GetKind() == "Service" &&
-				(targetRef.GetGroup() == "" || targetRef.GetGroup() == "core")
-			isServiceEntry := targetRef.GetKind() == "ServiceEntry" &&
-				targetRef.GetGroup() == "networking.istio.io"
-			fmt.Printf("  🔎 TargetRef[%d]: name=%q, namespace=%q (isService=%v, isServiceEntry=%v)\n",
-				i, targetRef.GetName(), targetRef.GetNamespace(), isService, isServiceEntry)
-
-			if isService || isServiceEntry {
-				providerID := Service{GroupKind: schema.GroupKind{Kind: targetRef.GetKind(), Group: targetRef.GetGroup()}}.Provider()
-
-				key := ServiceTargetKey{
+		var keys []targetRefKey
+		for _, targetRef := range p.Spec.GetTargetRefs() {
+			if (targetRef.GetKind() == "Service" && (targetRef.GetGroup() == "" || targetRef.GetGroup() == "core")) ||
+				(targetRef.GetKind() == "ServiceEntry" && targetRef.GetGroup() == "networking.istio.io") {
+				gk := wellknown.ServiceGVK
+				if targetRef.GetKind() == "ServiceEntry" {
+					gk = wellknown.ServiceEntryGVK
+				}
+				keys = append(keys, targetRefKey{
 					Name:      targetRef.GetName(),
 					Namespace: getEffectiveNamespace(targetRef.GetNamespace(), p.GetNamespace()),
-					Provider:  providerID,
-				}
-				fmt.Printf("  ✅ Added Service key: %+v\n", key)
-				keys = append(keys, key)
-			} else {
-				fmt.Printf("  ⛔ Skipped: not Service/ServiceEntry in expected group\n")
-			}
-
-		}
-		fmt.Printf("  🗂️ Total keys added for %s/%s: %d\n", p.GetNamespace(), p.GetName(), len(keys))
-		fmt.Printf("📦 Keys for Service policy %s/%s:\n", p.GetNamespace(), p.GetName())
-		for _, k := range keys {
-			fmt.Printf("  🔑 Key: %s\n", k)
-		}
-		return keys
-	})
-}
-
-// buildGatewayTargetIndex creates an index of policies by gateway target
-func buildGatewayTargetIndex(policies krt.Collection[*authcr.AuthorizationPolicy]) krt.Index[GatewayTargetKey, *authcr.AuthorizationPolicy] {
-	fmt.Printf("🚀 Creating Gateway index with initial %d policies\n", len(policies.List()))
-	return krt.NewIndex(policies, func(p *authcr.AuthorizationPolicy) []GatewayTargetKey {
-		fmt.Printf("🔥 Gateway index function called for policy: %s/%s, targetRefs=%d\n",
-		p.GetNamespace(), p.GetName(), len(p.Spec.GetTargetRefs()))
-
-		var keys []GatewayTargetKey
-
-		for i, targetRef := range p.Spec.GetTargetRefs() {
-			fmt.Printf("  🔎 TargetRef[%d]: name=%q, namespace=%q (isGateway=%v, isGatewayClass=%v)\n",
-				i, targetRef.GetName(), targetRef.GetNamespace(), targetRef.GetKind() == "Gateway", targetRef.GetKind() == "GatewayClass")
-			if targetRef.GetKind() == "Gateway" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
-				keys = append(keys, GatewayTargetKey{
+					Group:     gk.Group,
+					Kind:      gk.Kind,
+				})
+				fmt.Printf("  ✅ Added %s key: %+v\n", gk.Kind, keys[len(keys)-1])
+			} else if targetRef.GetKind() == "Gateway" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
+				keys = append(keys, targetRefKey{
 					Name:      targetRef.GetName(),
 					Namespace: getEffectiveNamespace(targetRef.GetNamespace(), p.GetNamespace()),
 					Group:     targetRef.GetGroup(),
 					Kind:      targetRef.GetKind(),
 				})
 				fmt.Printf("  ✅ Added Gateway key: %+v\n", keys[len(keys)-1])
-			
-			
-			} else if targetRef.GetKind() == "GatewayClass" && targetRef.GetGroup() == "gateway.networking.k8s.io" {
-				keys = append(keys, GatewayTargetKey{
+			} else if targetRef.GetKind() == "GatewayClass" && targetRef.GetGroup() == "gateway.networking.k8s.io" && p.GetNamespace() == RootNamespace {
+				keys = append(keys, targetRefKey{
 					Name:      targetRef.GetName(),
-					Namespace: "", // GatewayClass is cluster-scoped
+					Namespace: getEffectiveNamespace(targetRef.GetNamespace(), p.GetNamespace()),
 					Group:     targetRef.GetGroup(),
 					Kind:      targetRef.GetKind(),
 				})
 				fmt.Printf("  ✅ Added GatewayClass key: %+v\n", keys[len(keys)-1])
-
 			} else {
-				fmt.Printf("  ⛔ Skipped: not Gateway or GatewayClass in correct group\n")
+				fmt.Printf("  ⛔ Skipped: not Gateway, GatewayClass or Service/ServiceEntry in expected group\n")
 			}
 		}
-
+		fmt.Printf("  🗂️ Total keys added for %s/%s: %d\n", p.GetNamespace(), p.GetName(), len(keys))
+		fmt.Printf("📦 Keys for targetRefKey index %s/%s:\n", p.GetNamespace(), p.GetName())
+		for _, k := range keys {
+			fmt.Printf("  🔑 Key: %s\n", k)
+		}
 		return keys
 	})
 }
@@ -187,9 +169,7 @@ type waypointQueries struct {
 	servicesByWaypoint krt.Index[types.NamespacedName, WaypointedService]
 	authzPolicies      krt.Collection[*authcr.AuthorizationPolicy]
 	byNamespace        krt.Index[string, *authcr.AuthorizationPolicy]
-
-	byServiceTarget krt.Index[ServiceTargetKey, *authcr.AuthorizationPolicy]
-	byGatewayTarget krt.Index[GatewayTargetKey, *authcr.AuthorizationPolicy]
+	byTargetRefKey     krt.Index[targetRefKey, *authcr.AuthorizationPolicy]
 }
 
 func (w *waypointQueries) HasSynced() bool {

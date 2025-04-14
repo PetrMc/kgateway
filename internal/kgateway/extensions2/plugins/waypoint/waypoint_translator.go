@@ -85,7 +85,6 @@ func (w *waypointTranslator) Translate(
 	}
 	// Previous implementation that fetches everything
 	// 	authzPolicies := w.waypointQueries.GetAuthorizationPolicies(kctx, ctx, gateway.Namespace, RootNamespace)
-	authzPolicies := w.waypointQueries.GetAuthorizationPoliciesForGateway(kctx, ctx, gateway.Obj, RootNamespace)
 	waypointFor := waypointquery.GetWaypointFor(gateway.Obj)
 
 	if waypointFor.ForService() {
@@ -98,7 +97,6 @@ func (w *waypointTranslator) Translate(
 			routes,
 			gwListener,
 			attachedRoutes,
-			authzPolicies,
 		)
 		proxyListener.HttpFilterChain = append(proxyListener.HttpFilterChain, http...)
 		proxyListener.TcpFilterChain = append(proxyListener.TcpFilterChain, tcp...)
@@ -240,7 +238,6 @@ func (t *waypointTranslator) buildServiceChains(
 	gwRoutes []*query.RouteInfo,
 	gwListener *ir.Listener,
 	attachedRoutes sets.Set[types.NamespacedName],
-	authzPolicies []*authcr.AuthorizationPolicy,
 ) ([]ir.HttpFilterChainIR, []ir.TcpIR) {
 	var httpOut []ir.HttpFilterChainIR
 	var tcpOut []ir.TcpIR
@@ -261,11 +258,11 @@ func (t *waypointTranslator) buildServiceChains(
 		kctx,
 		ctx,
 		gw.Obj,
-		RootNamespace,
+		waypointquery.RootNamespace,
 	)
 	for _, svc := range services {
 		serviceSpecificPolicies := t.waypointQueries.GetAuthorizationPoliciesForService(kctx, ctx, &svc)
-		
+
 		// Combine with gateway policies (which serve as namespace-wide policies)
 		combinedPolicies := append([](*authcr.AuthorizationPolicy){}, GWAauthzPolicies...)
 		combinedPolicies = append(combinedPolicies, serviceSpecificPolicies...)
@@ -319,7 +316,8 @@ func (t *waypointTranslator) buildServiceChains(
 				}
 
 				// Apply HTTP RBAC filters to this HTTP filter chain
-				applyHTTPRBACFilters(&httpChain, httpRBAC, svc)
+				applyHTTPRBACFilters(&httpChain, httpRBAC)
+				fmt.Printf("Applied %d HTTP RBAC filters to %s/%s\n", len(httpRBAC), svc.GetNamespace(), svc.GetName())
 				httpOut = append(httpOut, httpChain)
 			} else {
 				tcpChain := ir.TcpIR{
@@ -329,7 +327,7 @@ func (t *waypointTranslator) buildServiceChains(
 
 				// Apply TCP RBAC filters to this TCP filter chain
 				applyTCPRBACFilters(&tcpChain, tcpRBAC, svc)
-
+				fmt.Printf("Applied %d TCP RBAC filters to %s/%s\n", len(tcpRBAC), svc.GetNamespace(), svc.GetName())
 				tcpOut = append(tcpOut, tcpChain)
 			}
 		}
