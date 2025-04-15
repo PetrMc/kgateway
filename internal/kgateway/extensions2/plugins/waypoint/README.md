@@ -1,4 +1,4 @@
-# KGateway Istio Waypoint Integration
+# Kgateway Istio Waypoint Integration
 
 **Note:** This document serves as a reference for some of key design decisions related to Kgateway Istio Waypoint integration. Rather than creating extensive documentation for each decision, this file collects important decision points to provide a centralized reference.
 
