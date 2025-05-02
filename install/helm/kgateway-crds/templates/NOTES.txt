@@ -1,0 +1,14 @@
+Thank you for installing the {{ .Chart.Name }} chart.
+
+This chart installs the Custom Resource Definitions (CRDs) required by kgateway.
+
+To verify that the CRDs have been installed:
+
+  kubectl get crds | grep 'kgateway'
+
+For more information on the installed CRDs, refer to the documentation:
+https://github.com/kgateway-dev/kgateway
+
+To uninstall the CRDs:
+
+  helm uninstall {{ .Release.Name }} --namespace {{ .Release.Namespace }}
