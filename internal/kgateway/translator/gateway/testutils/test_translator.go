@@ -26,6 +26,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/kgateway-dev/kgateway/v2/api/v1alpha1"
+	commonplugin "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 	extensionsplug "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugin"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/registry"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
@@ -38,7 +39,6 @@ import (
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
 	"github.com/kgateway-dev/kgateway/v2/pkg/client/clientset/versioned/fake"
 	common "github.com/kgateway-dev/kgateway/v2/pkg/pluginsdk/collections"
-	commonplugin "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 )
 
 type AssertReports func(gwNN types.NamespacedName, reportsMap reports.ReportMap)

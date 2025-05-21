@@ -20,12 +20,12 @@ import (
 	"istio.io/istio/pilot/pkg/serviceregistry/provider"
 	"istio.io/istio/pkg/slices"
 
+	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/kubernetes"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/serviceentry"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/ir"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/stringutils"
-	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 )
 
 // ErrUnsupportedServiceType should never occur due to unexpected input.
@@ -39,7 +39,7 @@ type Service struct {
 	Addresses []string
 	Ports     []ServicePort
 	Hostnames []string
-	Aliaser common.NamespaceAliaser
+	Aliaser   common.NamespaceAliaser
 }
 
 func (s Service) IsHeadless() bool {

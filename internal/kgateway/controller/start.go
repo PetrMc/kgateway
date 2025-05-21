@@ -22,6 +22,7 @@ import (
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/agentgatewaysyncer"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/deployer"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2"
+	commonplugin "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/inferenceextension/endpointpicker"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/registry"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
@@ -37,8 +38,6 @@ import (
 	kgtwschemes "github.com/kgateway-dev/kgateway/v2/pkg/schemes"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/kubeutils"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/namespaces"
-	commonplugin "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
-
 )
 
 const (
