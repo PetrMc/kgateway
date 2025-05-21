@@ -38,6 +38,7 @@ import (
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
 	"github.com/kgateway-dev/kgateway/v2/pkg/client/clientset/versioned/fake"
 	common "github.com/kgateway-dev/kgateway/v2/pkg/pluginsdk/collections"
+	commonplugin "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 )
 
 type AssertReports func(gwNN types.NamespacedName, reportsMap reports.ReportMap)
@@ -257,7 +258,7 @@ func (tc TestCase) Run(t test.Failer, ctx context.Context, settingsOpts ...Setti
 		return nil, err
 	}
 
-	plugins := registry.Plugins(ctx, commoncol)
+	plugins := registry.Plugins(ctx, commoncol, commonplugin.NoopAliaser{})
 	// TODO: consider moving the common code to a util that both proxy syncer and this test call
 	plugins = append(plugins, krtcollections.NewBuiltinPlugin(ctx))
 	extensions := registry.MergePlugins(plugins...)

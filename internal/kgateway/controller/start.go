@@ -37,6 +37,8 @@ import (
 	kgtwschemes "github.com/kgateway-dev/kgateway/v2/pkg/schemes"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/kubeutils"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/namespaces"
+	commonplugin "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
+
 )
 
 const (
@@ -237,7 +239,7 @@ func NewControllerBuilder(ctx context.Context, cfg StartConfig) (*ControllerBuil
 
 func pluginFactoryWithBuiltin(extraPlugins func(ctx context.Context, commoncol *common.CommonCollections) []sdk.Plugin) extensions2.K8sGatewayExtensionsFactory {
 	return func(ctx context.Context, commoncol *common.CommonCollections) sdk.Plugin {
-		plugins := registry.Plugins(ctx, commoncol)
+		plugins := registry.Plugins(ctx, commoncol, commonplugin.NoopAliaser{})
 		plugins = append(plugins, krtcollections.NewBuiltinPlugin(ctx))
 		if extraPlugins != nil {
 			plugins = append(plugins, extraPlugins(ctx, commoncol)...)

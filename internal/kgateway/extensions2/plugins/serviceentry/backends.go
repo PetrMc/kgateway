@@ -16,6 +16,8 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 
+	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
+
 	"k8s.io/utils/ptr"
 )
 
@@ -73,15 +75,16 @@ func backendsCollections(
 	logger *slog.Logger,
 	ServiceEntries krt.Collection[*networkingclient.ServiceEntry],
 	krtOpts krtutil.KrtOptions,
+	aliaser common.NamespaceAliaser,
 ) krt.Collection[ir.BackendObjectIR] {
 	return krt.NewManyCollection(ServiceEntries, func(ctx krt.HandlerContext, se *networkingclient.ServiceEntry) []ir.BackendObjectIR {
 		// passthrough not supported here
 		if se.Spec.GetResolution() == networking.ServiceEntry_NONE {
-			logger.Debug("skipping ServiceEntry with resolution: NONE", "name", se.GetName(), "namespace", se.GetNamespace())
+			logger.Debug("skipping ServiceEntry with resolution: NONE", "name", se.GetName(), "namespace", se.GetNamespace(), "aliaser namespace", aliaser.AliasNamespace(se.GetNamespace()))
 			return nil
 		}
 
-		logger.Debug("converting ServiceEntry to Upstream", "name", se.GetName(), "namespace", se.GetNamespace())
+		logger.Debug("converting ServiceEntry to Upstream", "name", se.GetName(), "namespace", se.GetNamespace(), "aliaser namespace", aliaser.AliasNamespace(se.GetNamespace()))
 		var out []ir.BackendObjectIR
 
 		for _, hostname := range se.Spec.GetHosts() {
@@ -91,6 +94,7 @@ func backendsCollections(
 					hostname,
 					int32(svcPort.GetNumber()),
 					svcPort.GetProtocol(),
+					aliaser,
 				))
 			}
 		}
@@ -104,11 +108,12 @@ func BuildServiceEntryBackendObjectIR(
 	hostname string,
 	svcPort int32,
 	svcProtocol string,
+	aliaser common.NamespaceAliaser,
 ) ir.BackendObjectIR {
 	objSrc := ir.ObjectSource{
 		Group:     gvk.ServiceEntry.Group,
 		Kind:      gvk.ServiceEntry.Kind,
-		Namespace: se.GetNamespace(),
+		Namespace: aliaser.AliasNamespace(se.GetNamespace()),
 		Name:      se.GetName(),
 	}
 	return ir.BackendObjectIR{
