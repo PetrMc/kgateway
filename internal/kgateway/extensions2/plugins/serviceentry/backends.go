@@ -110,10 +110,12 @@ func BuildServiceEntryBackendObjectIR(
 	svcProtocol string,
 	aliaser common.NamespaceAliaser,
 ) ir.BackendObjectIR {
+	originalNs := se.GetNamespace()
+	aliasedNs := aliaser.AliasNamespace(originalNs)
 	objSrc := ir.ObjectSource{
 		Group:     gvk.ServiceEntry.Group,
 		Kind:      gvk.ServiceEntry.Kind,
-		Namespace: aliaser.AliasNamespace(se.GetNamespace()),
+		Namespace: aliasedNs,
 		Name:      se.GetName(),
 	}
 	return ir.BackendObjectIR{
@@ -131,6 +133,12 @@ func BuildServiceEntryBackendObjectIR(
 				Kind:      wellknown.HostnameGVK.Kind,
 				Name:      hostname,
 				Namespace: "", // global
+			},
+			{
+				Group:     gvk.ServiceEntry.Group,
+				Kind:      gvk.ServiceEntry.Kind,
+				Namespace: originalNs, // <- original, unaliased
+				Name:      se.GetName(),
 			},
 			objSrc,
 		},
