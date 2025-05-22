@@ -26,6 +26,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/kgateway-dev/kgateway/v2/api/v1alpha1"
+	commonplugin "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 	extensionsplug "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugin"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/registry"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
@@ -257,7 +258,7 @@ func (tc TestCase) Run(t test.Failer, ctx context.Context, settingsOpts ...Setti
 		return nil, err
 	}
 
-	plugins := registry.Plugins(ctx, commoncol)
+	plugins := registry.Plugins(ctx, commoncol, commonplugin.NoopAliaser{})
 	// TODO: consider moving the common code to a util that both proxy syncer and this test call
 	plugins = append(plugins, krtcollections.NewBuiltinPlugin(ctx))
 	extensions := registry.MergePlugins(plugins...)
