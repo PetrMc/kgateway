@@ -81,7 +81,7 @@ func Plugins(ctx context.Context, commoncol *common.CommonCollections, aliaser c
 		httplistenerpolicy.NewPlugin(ctx, commoncol),
 		backendtlspolicy.NewPlugin(ctx, commoncol),
 		serviceentry.NewPlugin(ctx, commoncol, aliaser),
-		waypoint.NewPlugin(ctx, commoncol),
+		waypoint.NewPlugin(ctx, commoncol, aliaser),
 		sandwich.NewPlugin(),
 	}
 }

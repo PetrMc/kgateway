@@ -28,6 +28,7 @@ var VirtualWaypointGK = schema.GroupKind{
 func NewPlugin(
 	ctx context.Context,
 	commonCols *common.CommonCollections,
+	aliaser common.NamespaceAliaser,
 ) extensionsplug.Plugin {
 	queries := query.NewData(
 		commonCols,
