@@ -80,11 +80,11 @@ func backendsCollections(
 	return krt.NewManyCollection(ServiceEntries, func(ctx krt.HandlerContext, se *networkingclient.ServiceEntry) []ir.BackendObjectIR {
 		// passthrough not supported here
 		if se.Spec.GetResolution() == networking.ServiceEntry_NONE {
-			logger.Debug("skipping ServiceEntry with resolution: NONE", "name", se.GetName(), "namespace", se.GetNamespace(), "aliaser namespace", aliaser.AliasNamespace(se.GetNamespace()))
+			logger.Debug("skipping ServiceEntry with resolution: NONE", "name", se.GetName(), "namespace", se.GetNamespace(), "aliaser namespace", aliaser.AliasNamespace(se))
 			return nil
 		}
 
-		logger.Debug("converting ServiceEntry to Upstream", "name", se.GetName(), "namespace", se.GetNamespace(), "aliaser namespace", aliaser.AliasNamespace(se.GetNamespace()))
+		logger.Debug("converting ServiceEntry to Upstream", "name", se.GetName(), "namespace", se.GetNamespace(), "aliaser namespace", aliaser.AliasNamespace(se))
 		var out []ir.BackendObjectIR
 
 		for _, hostname := range se.Spec.GetHosts() {
@@ -111,13 +111,32 @@ func BuildServiceEntryBackendObjectIR(
 	aliaser common.NamespaceAliaser,
 ) ir.BackendObjectIR {
 	originalNs := se.GetNamespace()
-	aliasedNs := aliaser.AliasNamespace(originalNs)
+	aliasedNs := aliaser.AliasNamespace(se)
 	objSrc := ir.ObjectSource{
 		Group:     gvk.ServiceEntry.Group,
 		Kind:      gvk.ServiceEntry.Kind,
 		Namespace: aliasedNs,
 		Name:      se.GetName(),
 	}
+	// also allow hostname reference
+	aliases := []ir.ObjectSource{
+		{
+			Group:     wellknown.HostnameGVK.Group,
+			Kind:      wellknown.HostnameGVK.Kind,
+			Name:      hostname,
+			Namespace: "",
+		},
+	}
+	if aliasedNs != originalNs {
+		aliases = append(aliases, ir.ObjectSource{
+			Group:     gvk.ServiceEntry.Group,
+			Kind:      gvk.ServiceEntry.Kind,
+			Namespace: originalNs,
+			Name:      se.GetName(),
+		})
+	}
+	aliases = append(aliases, objSrc)
+
 	return ir.BackendObjectIR{
 		ObjectSource:      objSrc,
 		Port:              svcPort,
@@ -125,24 +144,7 @@ func BuildServiceEntryBackendObjectIR(
 		GvPrefix:          BackendClusterPrefix,
 		CanonicalHostname: hostname,
 		Obj:               se,
-
-		// also allow hostname reference
-		Aliases: []ir.ObjectSource{
-			{
-				Group:     wellknown.HostnameGVK.Group,
-				Kind:      wellknown.HostnameGVK.Kind,
-				Name:      hostname,
-				Namespace: "", // global
-			},
-			{
-				Group:     gvk.ServiceEntry.Group,
-				Kind:      gvk.ServiceEntry.Kind,
-				Namespace: originalNs, // <- original, unaliased
-				Name:      se.GetName(),
-			},
-			objSrc,
-		},
-
+		Aliases:           aliases,
 		// TODO ObjIr:             nil,
 		AttachedPolicies: ir.AttachedPolicies{},
 
