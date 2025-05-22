@@ -115,7 +115,7 @@ func BuildServiceEntryBackendObjectIR(
 	objSrc := ir.ObjectSource{
 		Group:     gvk.ServiceEntry.Group,
 		Kind:      gvk.ServiceEntry.Kind,
-		Namespace: aliasedNs,
+		Namespace: originalNs,
 		Name:      se.GetName(),
 	}
 	// also allow hostname reference
@@ -126,16 +126,17 @@ func BuildServiceEntryBackendObjectIR(
 			Name:      hostname,
 			Namespace: "",
 		},
+		objSrc,
 	}
+
 	if aliasedNs != originalNs {
 		aliases = append(aliases, ir.ObjectSource{
 			Group:     gvk.ServiceEntry.Group,
 			Kind:      gvk.ServiceEntry.Kind,
-			Namespace: originalNs,
+			Namespace: aliasedNs,
 			Name:      se.GetName(),
 		})
 	}
-	aliases = append(aliases, objSrc)
 
 	return ir.BackendObjectIR{
 		ObjectSource:      objSrc,
