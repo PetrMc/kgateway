@@ -9,7 +9,6 @@ import (
 	"time"
 
 	envoy_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
-	envoy_config_listener_v3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	ratelimitv3 "github.com/envoyproxy/go-control-plane/envoy/config/ratelimit/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	exteniondynamicmodulev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/dynamic_modules/v3"
@@ -255,23 +254,33 @@ func (e TrafficPolicyGatewayExtensionIR) Equals(other TrafficPolicyGatewayExtens
 	return e.Err.Error() == other.Err.Error()
 }
 
-type providerWithFromListener struct {
-	provider     *TrafficPolicyGatewayExtensionIR
-	fromListener bool
+type ProviderNeededMap struct {
+	// map filterhcain name -> providername -> provider
+	Providers map[string]map[string]*TrafficPolicyGatewayExtensionIR
+}
+
+func (p *ProviderNeededMap) Add(fcn, providerName string, provider *TrafficPolicyGatewayExtensionIR) {
+	if p.Providers == nil {
+		p.Providers = make(map[string]map[string]*TrafficPolicyGatewayExtensionIR)
+	}
+	if p.Providers[fcn] == nil {
+		p.Providers[fcn] = make(map[string]*TrafficPolicyGatewayExtensionIR)
+	}
+	p.Providers[fcn][providerName] = provider
 }
 
 type trafficPolicyPluginGwPass struct {
 	reporter reports.Reporter
-
-	setTransformationInChain bool // TODO(nfuden): make this multi stage
-	// TODO(nfuden): dont abuse httplevel filter in favor of route level
-	rustformationStash map[string]string
-	listenerTransform  *transformationpb.RouteTransformations
 	ir.UnimplementedProxyTranslationPass
-	localRateLimitInChain *localratelimitv3.LocalRateLimit
-	extAuthPerProvider    map[string]providerWithFromListener
-	extProcPerProvider    map[string]providerWithFromListener
-	rateLimitPerProvider  map[string]providerWithFromListener
+
+	setTransformationInChain map[string]bool // TODO(nfuden): make this multi stage
+	// TODO(nfuden): dont abuse httplevel filter in favor of route level
+	rustformationStash    map[string]string
+	listenerTransform     *transformationpb.RouteTransformations
+	localRateLimitInChain map[string]*localratelimitv3.LocalRateLimit
+	extAuthPerProvider    ProviderNeededMap
+	extProcPerProvider    ProviderNeededMap
+	rateLimitPerProvider  ProviderNeededMap
 }
 
 func (p *trafficPolicyPluginGwPass) ApplyHCM(ctx context.Context, pCtx *ir.HcmContext, out *envoyhttp.HttpConnectionManager) error {
@@ -355,11 +364,7 @@ func TranslateGatewayExtensionBuilder(commoncol *common.CommonCollections) func(
 			}
 
 			// Use the specialized function for rate limit service resolution
-			rateLimitConfig, err := resolveRateLimitService(grpcService, gExt.RateLimit)
-			if err != nil {
-				p.Err = fmt.Errorf("failed to resolve RateLimit backend: %w", err)
-				return p
-			}
+			rateLimitConfig := resolveRateLimitService(grpcService, gExt.RateLimit)
 
 			p.RateLimit = rateLimitConfig
 		}
@@ -394,7 +399,7 @@ func NewPlugin(ctx context.Context, commoncol *common.CommonCollections) extensi
 			ObjectSource: objSrc,
 			Policy:       policyCR,
 			PolicyIR:     policyIR,
-			TargetRefs:   pluginutils.TargetRefsToPolicyRefs(policyCR.Spec.TargetRefs, policyCR.Spec.TargetSelectors),
+			TargetRefs:   pluginutils.TargetRefsToPolicyRefsWithSectionName(policyCR.Spec.TargetRefs, policyCR.Spec.TargetSelectors),
 			Errors:       errors,
 		}
 		return pol
@@ -455,7 +460,7 @@ func ResolveExtGrpcService(krtctx krt.HandlerContext, backends *krtcollections.B
 	return envoyGrpcService, nil
 }
 
-func resolveRateLimitService(grpcService *envoy_core_v3.GrpcService, rateLimit *v1alpha1.RateLimitProvider) (*ratev3.RateLimit, error) {
+func resolveRateLimitService(grpcService *envoy_core_v3.GrpcService, rateLimit *v1alpha1.RateLimitProvider) *ratev3.RateLimit {
 	envoyRateLimit := &ratev3.RateLimit{
 		Domain:          rateLimit.Domain,
 		FailureModeDeny: !rateLimit.FailOpen,
@@ -467,26 +472,25 @@ func resolveRateLimitService(grpcService *envoy_core_v3.GrpcService, rateLimit *
 
 	// Set timeout if specified
 	if rateLimit.Timeout != "" {
-		duration, err := time.ParseDuration(rateLimit.Timeout)
-		if err != nil {
-			return nil, fmt.Errorf("invalid timeout in rate limit provider: %w", err)
+		if duration, err := time.ParseDuration(string(rateLimit.Timeout)); err == nil {
+			envoyRateLimit.Timeout = durationpb.New(duration)
+		} else {
+			// CEL validation should catch this, so this should never happen. log it here just in case and don't error.
+			logger.Error("invalid timeout in rate limit provider", "error", err)
 		}
-		envoyRateLimit.Timeout = durationpb.New(duration)
-	} else {
-		envoyRateLimit.Timeout = durationpb.New(defaultRateLimitTimeout)
 	}
-
 	// Set defaults for other required fields
 	envoyRateLimit.StatPrefix = rateLimitStatPrefix
 	envoyRateLimit.EnableXRatelimitHeaders = ratev3.RateLimit_DRAFT_VERSION_03
 	envoyRateLimit.RequestType = "both"
 
-	return envoyRateLimit, nil
+	return envoyRateLimit
 }
 
 func NewGatewayTranslationPass(ctx context.Context, tctx ir.GwTranslationCtx, reporter reports.Reporter) ir.ProxyTranslationPass {
 	return &trafficPolicyPluginGwPass{
-		reporter: reporter,
+		reporter:                 reporter,
+		setTransformationInChain: make(map[string]bool),
 	}
 }
 
@@ -494,65 +498,22 @@ func (p *TrafficPolicy) Name() string {
 	return "routepolicies" // TODO: rename to trafficpolicies
 }
 
-// called 1 time for each listener
-func (p *trafficPolicyPluginGwPass) ApplyListenerPlugin(ctx context.Context, pCtx *ir.ListenerContext, out *envoy_config_listener_v3.Listener) {
+func (p *trafficPolicyPluginGwPass) ApplyRouteConfigPlugin(ctx context.Context, pCtx *ir.RouteConfigContext, out *routev3.RouteConfiguration) {
 	policy, ok := pCtx.Policy.(*TrafficPolicy)
 	if !ok {
 		return
 	}
 
-	if policy.spec.extAuth != nil && policy.spec.extAuth.provider != nil {
-		if p.extAuthPerProvider == nil {
-			p.extAuthPerProvider = make(map[string]providerWithFromListener)
-		}
-		k := policy.spec.extAuth.provider.ResourceName()
-		p.extAuthPerProvider[k] = providerWithFromListener{
-			provider:     policy.spec.extAuth.provider,
-			fromListener: true,
-		}
-	}
-	if policy.spec.ExtProc != nil && policy.spec.ExtProc.provider != nil {
-		if p.extAuthPerProvider == nil {
-			p.extAuthPerProvider = make(map[string]providerWithFromListener)
-		}
-		k := policy.spec.extAuth.provider.ResourceName()
-		p.extAuthPerProvider[k] = providerWithFromListener{
-			provider:     policy.spec.extAuth.provider,
-			fromListener: true,
-		}
-	}
-	if policy.spec.rateLimit != nil && policy.spec.rateLimit.provider != nil {
-		if p.rateLimitPerProvider == nil {
-			p.rateLimitPerProvider = make(map[string]providerWithFromListener)
-		}
-		k := policy.spec.rateLimit.provider.ResourceName()
-		p.rateLimitPerProvider[k] = providerWithFromListener{
-			provider:     policy.spec.rateLimit.provider,
-			fromListener: true,
-		}
-	}
-
-	p.localRateLimitInChain = policy.spec.localRateLimit
-
-	if policy.spec.transform != nil {
-		p.setTransformationInChain = true
-		p.listenerTransform = policy.spec.transform
-		if p.rustformationStash == nil {
-			p.rustformationStash = make(map[string]string)
-		}
-		// routes cannot have an empty string id so we special case here
-		p.rustformationStash[""] = policy.spec.rustformationStringToStash
-	}
+	p.handlePolicies(pCtx.FilterChainName, &pCtx.TypedFilterConfig, policy.spec)
 }
 
 func (p *trafficPolicyPluginGwPass) ApplyVhostPlugin(ctx context.Context, pCtx *ir.VirtualHostContext, out *routev3.VirtualHost) {
-	//policy, ok := pCtx.Policy.(*TrafficPolicy)
-	//if !ok {
-	//	return
-	//}
+	policy, ok := pCtx.Policy.(*TrafficPolicy)
+	if !ok {
+		return
+	}
 
-	// TODO: this is disabled for now as we figure out the interaction of listener/routconfiguration/vhost policies.
-	//	p.handlePolicies(&pCtx.TypedFilterConfig, policy.spec)
+	p.handlePolicies(pCtx.FilterChainName, &pCtx.TypedFilterConfig, policy.spec)
 }
 
 // called 0 or more times
@@ -609,7 +570,7 @@ func (p *trafficPolicyPluginGwPass) ApplyForRoute(ctx context.Context, pCtx *ir.
 		}
 		pCtx.TypedFilterConfig.AddTypedConfig(metadataRouteTransformation, setmetaTransform)
 
-		p.setTransformationInChain = true
+		p.setTransformationInChain[pCtx.FilterChainName] = true
 	}
 
 	if policy.spec.AI != nil {
@@ -640,20 +601,21 @@ func (p *trafficPolicyPluginGwPass) ApplyForRoute(ctx context.Context, pCtx *ir.
 			p.processAITrafficPolicy(&pCtx.TypedFilterConfig, policy.spec.AI)
 		}
 	}
-	p.handlePolicies(&pCtx.TypedFilterConfig, policy.spec)
+	p.handlePolicies(pCtx.FilterChainName, &pCtx.TypedFilterConfig, policy.spec)
 
 	return nil
 }
 
-func (p *trafficPolicyPluginGwPass) handleTransformation(typedFilterConfig *ir.TypedFilterConfigMap, transform *transformationpb.RouteTransformations) {
+func (p *trafficPolicyPluginGwPass) handleTransformation(fcn string, typedFilterConfig *ir.TypedFilterConfigMap, transform *transformationpb.RouteTransformations) {
 	if transform == nil {
 		return
 	}
+
 	typedFilterConfig.AddTypedConfig(transformationFilterNamePrefix, transform)
-	p.setTransformationInChain = true
+	p.setTransformationInChain[fcn] = true
 }
 
-func (p *trafficPolicyPluginGwPass) handleLocalRateLimit(typedFilterConfig *ir.TypedFilterConfigMap, localRateLimit *localratelimitv3.LocalRateLimit) {
+func (p *trafficPolicyPluginGwPass) handleLocalRateLimit(fcn string, typedFilterConfig *ir.TypedFilterConfigMap, localRateLimit *localratelimitv3.LocalRateLimit) {
 	if localRateLimit == nil {
 		return
 	}
@@ -663,26 +625,29 @@ func (p *trafficPolicyPluginGwPass) handleLocalRateLimit(typedFilterConfig *ir.T
 	// globally disabled rate limit filter in the chain otherwise it will be ignored.
 	// If there is also rate limit for the listener, it will not override this one.
 	if p.localRateLimitInChain == nil {
-		p.localRateLimitInChain = &localratelimitv3.LocalRateLimit{
+		p.localRateLimitInChain = make(map[string]*localratelimitv3.LocalRateLimit)
+	}
+	if _, ok := p.localRateLimitInChain[fcn]; !ok {
+		p.localRateLimitInChain[fcn] = &localratelimitv3.LocalRateLimit{
 			StatPrefix: localRateLimitStatPrefix,
 		}
 	}
 }
 
-func (p *trafficPolicyPluginGwPass) handlePolicies(typedFilterConfig *ir.TypedFilterConfigMap, spec trafficPolicySpecIr) {
-	p.handleTransformation(typedFilterConfig, spec.transform)
+func (p *trafficPolicyPluginGwPass) handlePolicies(fcn string, typedFilterConfig *ir.TypedFilterConfigMap, spec trafficPolicySpecIr) {
+	p.handleTransformation(fcn, typedFilterConfig, spec.transform)
 	// Apply ExtAuthz configuration if present
 	// ExtAuth does not allow for most information such as destination
 	// to be set at the route level so we need to smuggle info upwards.
-	p.handleExtAuth(typedFilterConfig, spec.extAuth)
-	p.handleExtProc(typedFilterConfig, spec.ExtProc)
+	p.handleExtAuth(fcn, typedFilterConfig, spec.extAuth)
+	p.handleExtProc(fcn, typedFilterConfig, spec.ExtProc)
 	// Apply rate limit configuration if present
-	p.handleRateLimit(typedFilterConfig, spec.rateLimit)
-	p.handleLocalRateLimit(typedFilterConfig, spec.localRateLimit)
+	p.handleRateLimit(fcn, typedFilterConfig, spec.rateLimit)
+	p.handleLocalRateLimit(fcn, typedFilterConfig, spec.localRateLimit)
 }
 
 // handleRateLimit adds rate limit configurations to routes
-func (p *trafficPolicyPluginGwPass) handleRateLimit(typedFilterConfig *ir.TypedFilterConfigMap, rateLimit *RateLimitIR) {
+func (p *trafficPolicyPluginGwPass) handleRateLimit(fcn string, typedFilterConfig *ir.TypedFilterConfigMap, rateLimit *RateLimitIR) {
 	if rateLimit == nil {
 		return
 	}
@@ -693,14 +658,7 @@ func (p *trafficPolicyPluginGwPass) handleRateLimit(typedFilterConfig *ir.TypedF
 	providerName := rateLimit.provider.ResourceName()
 
 	// Initialize the map if it doesn't exist yet
-	if p.rateLimitPerProvider == nil {
-		p.rateLimitPerProvider = make(map[string]providerWithFromListener)
-	}
-	if _, ok := p.rateLimitPerProvider[providerName]; !ok {
-		p.rateLimitPerProvider[providerName] = providerWithFromListener{
-			provider: rateLimit.provider,
-		}
-	}
+	p.rateLimitPerProvider.Add(fcn, providerName, rateLimit.provider)
 
 	// Configure rate limit per route - enabling it for this specific route
 	rateLimitPerRoute := &ratev3.RateLimitPerRoute{
@@ -719,7 +677,7 @@ func (p *trafficPolicyPluginGwPass) ApplyForRouteBackend(
 		return nil
 	}
 
-	p.handlePolicies(&pCtx.TypedFilterConfig, rtPolicy.spec)
+	p.handlePolicies(pCtx.FilterChainName, &pCtx.TypedFilterConfig, rtPolicy.spec)
 
 	if rtPolicy.spec.AI != nil && (rtPolicy.spec.AI.Transformation != nil || rtPolicy.spec.AI.Extproc != nil) {
 		p.processAITrafficPolicy(&pCtx.TypedFilterConfig, rtPolicy.spec.AI)
@@ -728,7 +686,7 @@ func (p *trafficPolicyPluginGwPass) ApplyForRouteBackend(
 	return nil
 }
 
-func (p *trafficPolicyPluginGwPass) handleExtAuth(pCtxTypedFilterConfig *ir.TypedFilterConfigMap, extAuth *extAuthIR) {
+func (p *trafficPolicyPluginGwPass) handleExtAuth(pfc string, pCtxTypedFilterConfig *ir.TypedFilterConfigMap, extAuth *extAuthIR) {
 	if extAuth == nil {
 		return
 	}
@@ -744,28 +702,15 @@ func (p *trafficPolicyPluginGwPass) handleExtAuth(pCtxTypedFilterConfig *ir.Type
 			pCtxTypedFilterConfig.AddTypedConfig(extAuthFilterName(providerName),
 				extAuth.extauthPerRoute,
 			)
-		} else if !p.extAuthPerProvider[providerName].fromListener {
+		} else {
 			// if you are on a route and not trying to disable it then we need to override the top level disable on the filter chain
-			pCtxTypedFilterConfig.AddTypedConfig(extAuthFilterName(providerName),
-				&envoy_ext_authz_v3.ExtAuthzPerRoute{
-					Override: &envoy_ext_authz_v3.ExtAuthzPerRoute_CheckSettings{
-						CheckSettings: &envoy_ext_authz_v3.CheckSettings{},
-					},
-				},
-			)
+			pCtxTypedFilterConfig.AddTypedConfig(extAuthFilterName(providerName), enableFilterPerRoute)
 		}
-		if p.extAuthPerProvider == nil {
-			p.extAuthPerProvider = make(map[string]providerWithFromListener)
-		}
-		if _, ok := p.extAuthPerProvider[providerName]; !ok {
-			p.extAuthPerProvider[providerName] = providerWithFromListener{
-				provider: extAuth.provider,
-			}
-		}
+		p.extAuthPerProvider.Add(pfc, providerName, extAuth.provider)
 	}
 }
 
-func (p *trafficPolicyPluginGwPass) handleExtProc(pCtxTypedFilterConfig *ir.TypedFilterConfigMap, extProc *ExtprocIR) {
+func (p *trafficPolicyPluginGwPass) handleExtProc(fcn string, pCtxTypedFilterConfig *ir.TypedFilterConfigMap, extProc *ExtprocIR) {
 	if extProc == nil || extProc.provider == nil {
 		return
 	}
@@ -776,21 +721,14 @@ func (p *trafficPolicyPluginGwPass) handleExtProc(pCtxTypedFilterConfig *ir.Type
 		pCtxTypedFilterConfig.AddTypedConfig(extProcFilterName(providerName),
 			extProc.ExtProcPerRoute,
 		)
-	} else if !p.extProcPerProvider[providerName].fromListener {
+	} else {
 		// if you are on a route and not trying to disable it then we need to override the top level disable on the filter chain
 		pCtxTypedFilterConfig.AddTypedConfig(extProcFilterName(providerName),
 			&envoy_ext_proc_v3.ExtProcPerRoute{Override: &envoy_ext_proc_v3.ExtProcPerRoute_Overrides{Overrides: &envoy_ext_proc_v3.ExtProcOverrides{}}},
 		)
 	}
 
-	if p.extProcPerProvider == nil {
-		p.extProcPerProvider = make(map[string]providerWithFromListener)
-	}
-	if _, ok := p.extProcPerProvider[providerName]; !ok {
-		p.extProcPerProvider[providerName] = providerWithFromListener{
-			provider: extProc.provider,
-		}
-	}
+	p.extProcPerProvider.Add(fcn, providerName, extProc.provider)
 }
 
 // called 1 time per listener
@@ -800,8 +738,8 @@ func (p *trafficPolicyPluginGwPass) HttpFilters(ctx context.Context, fcc ir.Filt
 	filters := []plugins.StagedHttpFilter{}
 
 	// Add Ext_proc filters for listener
-	for providerName, providerExtProc := range p.extProcPerProvider {
-		extProcFilter := providerExtProc.provider.ExtProc
+	for providerName, provider := range p.extProcPerProvider.Providers[fcc.FilterChainName] {
+		extProcFilter := provider.ExtProc
 		if extProcFilter == nil {
 			continue
 		}
@@ -812,27 +750,27 @@ func (p *trafficPolicyPluginGwPass) HttpFilters(ctx context.Context, fcc ir.Filt
 			extProcFilter,
 			plugins.AfterStage(plugins.WellKnownFilterStage(plugins.AuthZStage)))
 
-		// handle the two enable attachement cases
-		if !providerExtProc.fromListener {
-			// handle the case where route level only should be fired
-			stagedExtProcFilter.Filter.Disabled = true
-		}
+		// handle the case where route level only should be fired
+		stagedExtProcFilter.Filter.Disabled = true
 
 		filters = append(filters, stagedExtProcFilter)
 	}
 
 	// register classic transforms
-	if p.setTransformationInChain && !useRustformations {
+	if p.setTransformationInChain[fcc.FilterChainName] && !useRustformations {
 		// TODO(nfuden): support stages such as early
 		transformationCfg := transformationpb.FilterTransformations{}
 		if p.listenerTransform != nil {
 			convertClassicRouteToListener(&transformationCfg, p.listenerTransform)
 		}
-		filters = append(filters, plugins.MustNewStagedFilter(transformationFilterNamePrefix,
+		filter := plugins.MustNewStagedFilter(transformationFilterNamePrefix,
 			&transformationCfg,
-			plugins.BeforeStage(plugins.AcceptedStage)))
+			plugins.BeforeStage(plugins.AcceptedStage))
+		filter.Filter.Disabled = true
+
+		filters = append(filters, filter)
 	}
-	if p.setTransformationInChain && useRustformations {
+	if p.setTransformationInChain[fcc.FilterChainName] && useRustformations {
 		// ---------------
 		// | END CLASSIC |
 		// ---------------
@@ -880,7 +818,7 @@ func (p *trafficPolicyPluginGwPass) HttpFilters(ctx context.Context, fcc ir.Filt
 	}
 
 	// register the transformation work once
-	if len(p.extAuthPerProvider) != 0 {
+	if len(p.extAuthPerProvider.Providers[fcc.FilterChainName]) != 0 {
 		// register the filter that sets metadata so that it can have overrides on the route level
 		f := plugins.MustNewStagedFilter(extAuthGlobalDisableFilterName,
 			setMetadataConfig,
@@ -890,8 +828,8 @@ func (p *trafficPolicyPluginGwPass) HttpFilters(ctx context.Context, fcc ir.Filt
 	}
 
 	// Add Ext_authz filter for listener
-	for providerName, providerExtauth := range p.extAuthPerProvider {
-		extAuthFilter := providerExtauth.provider.ExtAuth
+	for providerName, provider := range p.extAuthPerProvider.Providers[fcc.FilterChainName] {
+		extAuthFilter := provider.ExtAuth
 		if extAuthFilter == nil {
 			continue
 		}
@@ -902,24 +840,22 @@ func (p *trafficPolicyPluginGwPass) HttpFilters(ctx context.Context, fcc ir.Filt
 			extAuthFilter,
 			plugins.DuringStage(plugins.AuthZStage))
 
-		// handle the two enable attachement cases
-		if !providerExtauth.fromListener {
-			// handle the case where route level only should be fired
-			stagedExtAuthFilter.Filter.Disabled = true
-		}
+		stagedExtAuthFilter.Filter.Disabled = true
 
 		filters = append(filters, stagedExtAuthFilter)
 	}
 
-	if p.localRateLimitInChain != nil {
-		filters = append(filters, plugins.MustNewStagedFilter(localRateLimitFilterNamePrefix,
-			p.localRateLimitInChain,
-			plugins.BeforeStage(plugins.AcceptedStage)))
+	if p.localRateLimitInChain[fcc.FilterChainName] != nil {
+		filter := plugins.MustNewStagedFilter(localRateLimitFilterNamePrefix,
+			p.localRateLimitInChain[fcc.FilterChainName],
+			plugins.BeforeStage(plugins.AcceptedStage))
+		filter.Filter.Disabled = true
+		filters = append(filters, filter)
 	}
 
 	// Add global rate limit filters from providers
-	for providerName, providerRateLimit := range p.rateLimitPerProvider {
-		rateLimitFilter := providerRateLimit.provider.RateLimit
+	for providerName, provider := range p.rateLimitPerProvider.Providers[fcc.FilterChainName] {
+		rateLimitFilter := provider.RateLimit
 		if rateLimitFilter == nil {
 			continue
 		}
@@ -929,12 +865,6 @@ func (p *trafficPolicyPluginGwPass) HttpFilters(ctx context.Context, fcc ir.Filt
 		stagedRateLimitFilter := plugins.MustNewStagedFilter(rateLimitName,
 			rateLimitFilter,
 			plugins.DuringStage(plugins.RateLimitStage))
-
-		// If this rate limit is not from a listener, disable it at the listener level
-		// so it can be enabled selectively at the route level
-		if !providerRateLimit.fromListener {
-			stagedRateLimitFilter.Filter.Disabled = true
-		}
 
 		filters = append(filters, stagedRateLimitFilter)
 	}
