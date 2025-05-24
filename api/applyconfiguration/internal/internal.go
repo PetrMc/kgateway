@@ -885,21 +885,6 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         scalar: string
       default: ""
-- name: com.github.kgateway-dev.kgateway.v2.api.v1alpha1.LocalPolicyTargetReferenceWithSectionName
-  map:
-    fields:
-    - name: group
-      type:
-        scalar: string
-      default: ""
-    - name: kind
-      type:
-        scalar: string
-      default: ""
-    - name: name
-      type:
-        scalar: string
-      default: ""
     - name: sectionName
       type:
         scalar: string
@@ -1374,7 +1359,7 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         list:
           elementType:
-            namedType: com.github.kgateway-dev.kgateway.v2.api.v1alpha1.LocalPolicyTargetReferenceWithSectionName
+            namedType: com.github.kgateway-dev.kgateway.v2.api.v1alpha1.LocalPolicyTargetReference
           elementRelationship: atomic
     - name: targetSelectors
       type:

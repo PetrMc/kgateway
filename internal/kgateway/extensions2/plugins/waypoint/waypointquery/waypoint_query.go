@@ -59,7 +59,7 @@ func NewQueries(
 	commonCols *common.CommonCollections,
 	gwQueries query.GatewayQueries,
 ) WaypointQueries {
-	waypointedServices, servicesByWaypoint, waypointByService := waypointAttachmentIndex(commonCols, common.NoopAliaser{})
+	waypointedServices, servicesByWaypoint, waypointByService := waypointAttachmentIndex(commonCols)
 
 	// Watch authz policies changes in the cluster.
 	authzInformer := kclient.NewDelayedInformer[*authcr.AuthorizationPolicy](
@@ -293,7 +293,6 @@ func doWaypointAttachment(
 
 func waypointAttachmentIndex(
 	commonCols *common.CommonCollections,
-	aliaser common.NamespaceAliaser,
 ) (
 	krt.Collection[WaypointedService],
 	krt.Index[types.NamespacedName, WaypointedService],
@@ -306,10 +305,10 @@ func waypointAttachmentIndex(
 	waypointServiceAttachments := krt.JoinCollection(
 		[]krt.Collection[WaypointedService]{
 			krt.NewCollection(commonCols.Services, func(ctx krt.HandlerContext, kubeSvc *corev1.Service) *WaypointedService {
-				return doWaypointAttachment(ctx, commonCols, FromService(kubeSvc, aliaser))
+				return doWaypointAttachment(ctx, commonCols, FromService(kubeSvc))
 			}, commonCols.KrtOpts.ToOptions("WaypointKubeServices")...),
 			krt.NewCollection(commonCols.ServiceEntries, func(ctx krt.HandlerContext, istioSE *networkingclient.ServiceEntry) *WaypointedService {
-				return doWaypointAttachment(ctx, commonCols, FromServiceEntry(istioSE, aliaser))
+				return doWaypointAttachment(ctx, commonCols, FromServiceEntry(istioSE))
 			}, commonCols.KrtOpts.ToOptions("WaypointServiceEntries")...),
 		},
 		commonCols.KrtOpts.ToOptions("WaypointLogicalServices")...,

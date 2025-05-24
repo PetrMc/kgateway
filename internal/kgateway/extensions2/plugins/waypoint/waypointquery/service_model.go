@@ -20,7 +20,6 @@ import (
 	"istio.io/istio/pilot/pkg/serviceregistry/provider"
 	"istio.io/istio/pkg/slices"
 
-	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/kubernetes"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/serviceentry"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/ir"
@@ -39,7 +38,6 @@ type Service struct {
 	Addresses []string
 	Ports     []ServicePort
 	Hostnames []string
-	Aliaser   common.NamespaceAliaser
 }
 
 func (s Service) IsHeadless() bool {
@@ -110,7 +108,6 @@ func (s Service) BackendObject(port uint32) ir.BackendObjectIR {
 			hostname,
 			int32(port),
 			protocol,
-			s.Aliaser,
 		)
 	case *corev1.Service:
 		return kubernetes.BuildServiceBackendObjectIR(obj, int32(port), protocol)
@@ -213,7 +210,7 @@ func fqdn(name, ns string) string {
 	return fmt.Sprintf("%s.%s.svc.%s", name, ns, clusterDomain)
 }
 
-func FromService(svc *corev1.Service, aliaser common.NamespaceAliaser) Service {
+func FromService(svc *corev1.Service) Service {
 	addrs := serviceAddresses(svc)
 
 	return Service{
@@ -221,7 +218,6 @@ func FromService(svc *corev1.Service, aliaser common.NamespaceAliaser) Service {
 		GroupKind: wellknown.ServiceGVK.GroupKind(),
 		Addresses: addrs,
 		Hostnames: []string{fqdn(svc.GetName(), svc.GetNamespace())},
-		Aliaser:   aliaser,
 		Ports: slices.Map(svc.Spec.Ports, func(p corev1.ServicePort) ServicePort {
 			protocol := string(p.Protocol)
 			if p.AppProtocol != nil {
@@ -239,7 +235,7 @@ func FromService(svc *corev1.Service, aliaser common.NamespaceAliaser) Service {
 	}
 }
 
-func FromServiceEntry(se *networkingclient.ServiceEntry, aliaser common.NamespaceAliaser) Service {
+func FromServiceEntry(se *networkingclient.ServiceEntry) Service {
 	addrs := serviceEntryAddresses(se)
 
 	return Service{
@@ -255,7 +251,6 @@ func FromServiceEntry(se *networkingclient.ServiceEntry, aliaser common.Namespac
 				TargetPort: int32(p.TargetPort),
 			}
 		}),
-		Aliaser: aliaser,
 	}
 }
 

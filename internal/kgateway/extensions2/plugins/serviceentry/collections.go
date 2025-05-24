@@ -118,7 +118,6 @@ type serviceEntryPlugin struct {
 
 func initServiceEntryCollections(
 	commonCols *common.CommonCollections,
-	aliaser common.NamespaceAliaser,
 ) serviceEntryPlugin {
 	// setup input collections
 	weInformer := kclient.NewDelayedInformer[*networkingclient.WorkloadEntry](
@@ -140,7 +139,7 @@ func initServiceEntryCollections(
 	)
 
 	// init the outputs
-	Backends := backendsCollections(logger, commonCols.ServiceEntries, commonCols.KrtOpts, aliaser)
+	Backends := backendsCollections(logger, commonCols.ServiceEntries, commonCols.KrtOpts)
 	Endpoints := endpointsCollection(Backends, SelectedWorkloads, selectedWorkloadsIndex, commonCols.KrtOpts)
 
 	return serviceEntryPlugin{

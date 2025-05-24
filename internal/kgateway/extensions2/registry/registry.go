@@ -69,7 +69,7 @@ func MergePlugins(plug ...sdk.Plugin) sdk.Plugin {
 	return ret
 }
 
-func Plugins(ctx context.Context, commoncol *common.CommonCollections, aliaser common.NamespaceAliaser) []sdk.Plugin {
+func Plugins(ctx context.Context, commoncol *common.CommonCollections) []sdk.Plugin {
 	return []sdk.Plugin{
 		// Add plugins here
 		backend.NewPlugin(ctx, commoncol),
@@ -80,8 +80,8 @@ func Plugins(ctx context.Context, commoncol *common.CommonCollections, aliaser c
 		destrule.NewPlugin(ctx, commoncol),
 		httplistenerpolicy.NewPlugin(ctx, commoncol),
 		backendtlspolicy.NewPlugin(ctx, commoncol),
-		serviceentry.NewPlugin(ctx, commoncol, aliaser),
-		waypoint.NewPlugin(ctx, commoncol, aliaser),
+		serviceentry.NewPlugin(ctx, commoncol),
+		waypoint.NewPlugin(ctx, commoncol),
 		sandwich.NewPlugin(),
 	}
 }

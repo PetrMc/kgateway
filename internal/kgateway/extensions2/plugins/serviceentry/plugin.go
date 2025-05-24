@@ -21,9 +21,8 @@ var logger = logging.New("plugin/serviceentry")
 func NewPlugin(
 	_ context.Context,
 	commonCols *common.CommonCollections,
-	aliaser common.NamespaceAliaser,
 ) extensionsplug.Plugin {
-	seCollections := initServiceEntryCollections(commonCols, aliaser)
+	seCollections := initServiceEntryCollections(commonCols)
 	return extensionsplug.Plugin{
 		ContributesBackends: map[schema.GroupKind]extensionsplug.BackendPlugin{
 			wellknown.ServiceEntryGVK.GroupKind(): {

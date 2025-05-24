@@ -22,7 +22,6 @@ import (
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/agentgatewaysyncer"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/deployer"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2"
-	commonplugin "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugins/inferenceextension/endpointpicker"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/registry"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
@@ -238,7 +237,7 @@ func NewControllerBuilder(ctx context.Context, cfg StartConfig) (*ControllerBuil
 
 func pluginFactoryWithBuiltin(extraPlugins func(ctx context.Context, commoncol *common.CommonCollections) []sdk.Plugin) extensions2.K8sGatewayExtensionsFactory {
 	return func(ctx context.Context, commoncol *common.CommonCollections) sdk.Plugin {
-		plugins := registry.Plugins(ctx, commoncol, commonplugin.NoopAliaser{})
+		plugins := registry.Plugins(ctx, commoncol)
 		plugins = append(plugins, krtcollections.NewBuiltinPlugin(ctx))
 		if extraPlugins != nil {
 			plugins = append(plugins, extraPlugins(ctx, commoncol)...)
