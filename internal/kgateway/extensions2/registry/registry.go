@@ -2,7 +2,10 @@ package registry
 
 import (
 	"context"
+	"fmt"
 	"maps"
+	"os"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -69,19 +72,35 @@ func MergePlugins(plug ...sdk.Plugin) sdk.Plugin {
 	return ret
 }
 
+// Plugins returns a list of enabled plugins, optionally filtered
 func Plugins(ctx context.Context, commoncol *common.CommonCollections) []sdk.Plugin {
-	return []sdk.Plugin{
-		// Add plugins here
-		backend.NewPlugin(ctx, commoncol),
-		trafficpolicy.NewPlugin(ctx, commoncol),
-		directresponse.NewPlugin(ctx, commoncol),
-		kubernetes.NewPlugin(ctx, commoncol),
-		istio.NewPlugin(ctx, commoncol),
-		destrule.NewPlugin(ctx, commoncol),
-		httplistenerpolicy.NewPlugin(ctx, commoncol),
-		backendtlspolicy.NewPlugin(ctx, commoncol),
-		serviceentry.NewPlugin(ctx, commoncol),
-		waypoint.NewPlugin(ctx, commoncol),
-		sandwich.NewPlugin(),
+	excluded := map[string]bool{}
+	fmt.Println("Excluding plugins using env var", os.Getenv("KGTW_EXCLUDE_PLUGINS"),)
+	if excludedStr := os.Getenv("KGTW_EXCLUDE_PLUGINS"); excludedStr != "" {
+		for _, name := range strings.Split(excludedStr, ",") {
+			excluded[strings.TrimSpace(name)] = true
+			fmt.Println("Excluding plugin", name)
+		}
 	}
+	
+	var plugins []sdk.Plugin
+	add := func(name string, p sdk.Plugin) {
+		if !excluded[name] {
+			plugins = append(plugins, p)
+		}
+	}
+
+	add("backend", backend.NewPlugin(ctx, commoncol))
+	add("trafficpolicy", trafficpolicy.NewPlugin(ctx, commoncol))
+	add("directresponse", directresponse.NewPlugin(ctx, commoncol))
+	add("kubernetes", kubernetes.NewPlugin(ctx, commoncol))
+	add("istio", istio.NewPlugin(ctx, commoncol))
+	add("destrule", destrule.NewPlugin(ctx, commoncol))
+	add("httplistenerpolicy", httplistenerpolicy.NewPlugin(ctx, commoncol))
+	add("backendtlspolicy", backendtlspolicy.NewPlugin(ctx, commoncol))
+	add("serviceentry", serviceentry.NewPlugin(ctx, commoncol))
+	add("waypoint", waypoint.NewPlugin(ctx, commoncol))
+	add("sandwich", sandwich.NewPlugin())
+
+	return plugins
 }
