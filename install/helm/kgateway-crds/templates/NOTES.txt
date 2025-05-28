@@ -6,9 +6,6 @@ To verify that the CRDs have been installed:
 
   kubectl get crds | grep 'kgateway'
 
-For more information on the installed CRDs, refer to the documentation:
-https://github.com/kgateway-dev/kgateway
-
 To uninstall the CRDs:
 
   helm uninstall {{ .Release.Name }} --namespace {{ .Release.Namespace }}
@@ -20,4 +17,8 @@ You may need to manually delete the CRDs if they are no longer needed. To do so,
 
 Replace <crd-name> with the name of the CRD(s) you wish to delete. For example:
 
-  kubectl delete crd kgatewayresources.kgateway.io
+  kubectl delete crd gatewayparameters.gateway.kgateway.dev
+
+To learn how to access and use kgateway, please visit the official documentation:
+
+  https://kgateway.dev/docs/
