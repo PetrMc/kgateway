@@ -192,6 +192,44 @@ var _ = DescribeTable("Basic GatewayTranslator Tests",
 			},
 		}),
 	Entry(
+		"TrafficPolicy with with targetSelectors",
+		translatorTestCase{
+			inputFile:  "traffic-policy/label_based.yaml",
+			outputFile: "traffic-policy/label_based.yaml",
+			gwNN: types.NamespacedName{
+				Namespace: "infra",
+				Name:      "example-gateway",
+			},
+			assertReports: func(gwNN types.NamespacedName, reportsMap reports.ReportMap) {
+				var currentStatus gwv1alpha2.PolicyStatus
+
+				expectedPolicies := []reports.PolicyKey{
+					{Group: "gateway.kgateway.dev", Kind: "TrafficPolicy", Namespace: "infra", Name: "transform"},
+					{Group: "gateway.kgateway.dev", Kind: "TrafficPolicy", Namespace: "infra", Name: "rate-limit"},
+				}
+
+				for _, policy := range expectedPolicies {
+					// Validate the 2 policies attached to the route
+					status := reportsMap.BuildPolicyStatus(context.TODO(), policy, wellknown.GatewayControllerName, currentStatus)
+					Expect(status).NotTo(BeNil())
+					Expect(status.Ancestors).To(HaveLen(1)) // 1 Gateway(ancestor)
+					acceptedCondition := meta.FindStatusCondition(status.Ancestors[0].Conditions, string(gwv1alpha2.PolicyConditionAccepted))
+					Expect(acceptedCondition).NotTo(BeNil())
+					Expect(acceptedCondition.Status).To(Equal(metav1.ConditionTrue))
+				}
+			},
+		}),
+	Entry(
+		"TrafficPolicy edge cases",
+		translatorTestCase{
+			inputFile:  "traffic-policy/extauth.yaml",
+			outputFile: "traffic-policy/extauth.yaml",
+			gwNN: types.NamespacedName{
+				Namespace: "infra",
+				Name:      "example-gateway",
+			},
+		}),
+	Entry(
 		"tcp gateway with basic routing",
 		translatorTestCase{
 			inputFile:  "tcp-routing/basic.yaml",
@@ -361,6 +399,91 @@ var _ = DescribeTable("Basic GatewayTranslator Tests",
 				Name:      "example-gateway",
 			},
 		}),
+	Entry(
+		"grpc gateway with basic routing",
+		translatorTestCase{
+			inputFile:  "grpc-routing/basic.yaml",
+			outputFile: "grpc-routing/basic-proxy.yaml",
+			gwNN: types.NamespacedName{
+				Namespace: "default",
+				Name:      "example-gateway",
+			},
+			assertReports: func(gwNN types.NamespacedName, reportsMap reports.ReportMap) {
+				route := &gwv1.GRPCRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-grpc-route",
+						Namespace: "default",
+					},
+				}
+				routeStatus := reportsMap.BuildRouteStatus(context.TODO(), route, wellknown.GatewayControllerName)
+				Expect(routeStatus).NotTo(BeNil())
+				Expect(routeStatus.Parents).To(HaveLen(1))
+				resolvedRefs := meta.FindStatusCondition(routeStatus.Parents[0].Conditions, string(gwv1.RouteConditionResolvedRefs))
+				Expect(resolvedRefs).NotTo(BeNil())
+				Expect(resolvedRefs.Status).To(Equal(metav1.ConditionTrue))
+				Expect(resolvedRefs.Reason).To(Equal(string(gwv1.RouteReasonResolvedRefs)))
+			},
+		}),
+	Entry(
+		"grpcroute with missing backend reports correctly",
+		translatorTestCase{
+			inputFile:  "grpc-routing/missing-backend.yaml",
+			outputFile: "grpc-routing/missing-backend.yaml",
+			gwNN: types.NamespacedName{
+				Namespace: "default",
+				Name:      "example-gateway",
+			},
+			assertReports: func(gwNN types.NamespacedName, reportsMap reports.ReportMap) {
+				route := &gwv1.GRPCRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-grpc-route",
+						Namespace: "default",
+					},
+				}
+				routeStatus := reportsMap.BuildRouteStatus(context.TODO(), route, wellknown.GatewayControllerName)
+				Expect(routeStatus).NotTo(BeNil())
+				Expect(routeStatus.Parents).To(HaveLen(1))
+				resolvedRefs := meta.FindStatusCondition(routeStatus.Parents[0].Conditions, string(gwv1.RouteConditionResolvedRefs))
+				Expect(resolvedRefs).NotTo(BeNil())
+				Expect(resolvedRefs.Status).To(Equal(metav1.ConditionFalse))
+				Expect(resolvedRefs.Message).To(Equal("Service \"example-grpc-svc\" not found"))
+			},
+		}),
+	Entry(
+		"grpcroute with invalid backend reports correctly",
+		translatorTestCase{
+			inputFile:  "grpc-routing/invalid-backend.yaml",
+			outputFile: "grpc-routing/invalid-backend.yaml",
+			gwNN: types.NamespacedName{
+				Namespace: "default",
+				Name:      "example-gateway",
+			},
+			assertReports: func(gwNN types.NamespacedName, reportsMap reports.ReportMap) {
+				route := &gwv1.GRPCRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-grpc-route",
+						Namespace: "default",
+					},
+				}
+				routeStatus := reportsMap.BuildRouteStatus(context.TODO(), route, wellknown.GatewayControllerName)
+				Expect(routeStatus).NotTo(BeNil())
+				Expect(routeStatus.Parents).To(HaveLen(1))
+				resolvedRefs := meta.FindStatusCondition(routeStatus.Parents[0].Conditions, string(gwv1.RouteConditionResolvedRefs))
+				Expect(resolvedRefs).NotTo(BeNil())
+				Expect(resolvedRefs.Status).To(Equal(metav1.ConditionFalse))
+				Expect(resolvedRefs.Message).To(Equal("unknown backend kind"))
+			},
+		}),
+	Entry(
+		"grpc gateway with multiple backend services",
+		translatorTestCase{
+			inputFile:  "grpc-routing/multi-backend.yaml",
+			outputFile: "grpc-routing/multi-backend-proxy.yaml",
+			gwNN: types.NamespacedName{
+				Namespace: "default",
+				Name:      "example-grpc-gateway",
+			},
+		}),
 	Entry("Plugin Backend", translatorTestCase{
 		inputFile:  "backend-plugin/gateway.yaml",
 		outputFile: "backend-plugin-proxy.yaml",
@@ -444,4 +567,94 @@ var _ = DescribeTable("Route Delegation translator",
 	Entry("TrafficPolicy filter override merge", "traffic_policy_filter_override_merge.yaml", ""),
 	Entry("Built-in rule inheritance", "builtin_rule_inheritance.yaml", ""),
 	Entry("Label based delegation", "label_based.yaml", ""),
+)
+
+var _ = DescribeTable("Discovery Namespace Selector",
+	func(cfgJSON string, inputFile string, outputFile string, errdesc string) {
+		dir := fsutils.MustGetThisDir()
+		testutils.TestTranslation(
+			GinkgoT(),
+			context.TODO(),
+			[]string{
+				filepath.Join(dir, "testutils/inputs/discovery-namespace-selector", inputFile),
+			},
+			filepath.Join(dir, "testutils/outputs/discovery-namespace-selector", outputFile),
+			types.NamespacedName{
+				Namespace: "infra",
+				Name:      "example-gateway",
+			},
+			func(gwNN types.NamespacedName, reportsMap reports.ReportMap) {
+				if errdesc == "" {
+					Expect(testutils.AreReportsSuccess(gwNN, reportsMap)).NotTo(HaveOccurred())
+				} else {
+					Expect(testutils.AreReportsSuccess(gwNN, reportsMap)).To(MatchError(ContainSubstring(errdesc)))
+				}
+			},
+			testutils.SettingsWithDiscoveryNamespaceSelectors(cfgJSON),
+		)
+	},
+	Entry("Select all resources",
+		`[
+  {
+    "matchExpressions": [
+      {
+        "key": "kubernetes.io/metadata.name",
+        "operator": "In",
+        "values": [
+          "infra"
+        ]
+      }
+    ]
+  },
+	{
+		"matchLabels": {
+			"app": "a"
+		}
+	}
+]`,
+		"base.yaml", "base_select_all.yaml", ""),
+	Entry("Select all resources; AND matchExpressions and matchLabels",
+		`[
+  {
+    "matchExpressions": [
+      {
+        "key": "kubernetes.io/metadata.name",
+        "operator": "In",
+        "values": [
+          "infra"
+        ]
+      }
+    ]
+  },
+	{
+    "matchExpressions": [
+      {
+        "key": "kubernetes.io/metadata.name",
+        "operator": "In",
+        "values": [
+          "a"
+        ]
+      }
+    ],
+		"matchLabels": {
+			"app": "a"
+		}
+	}
+]`,
+		"base.yaml", "base_select_all.yaml", ""),
+	Entry("Select only namespace infra",
+		`[
+  {
+    "matchExpressions": [
+      {
+        "key": "kubernetes.io/metadata.name",
+        "operator": "In",
+        "values": [
+          "infra"
+        ]
+      }
+    ]
+  }
+]`,
+		"base.yaml", "base_select_infra.yaml", "condition error for httproute: infra/example-route"),
 )

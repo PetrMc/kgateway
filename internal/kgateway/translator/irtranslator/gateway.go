@@ -1,6 +1,8 @@
 package irtranslator
 
 import (
+	"sort"
+
 	envoy_config_cluster_v3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	envoy_config_listener_v3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	envoy_config_route_v3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
@@ -13,7 +15,10 @@ import (
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/ir"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/reports"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
+	"github.com/kgateway-dev/kgateway/v2/pkg/logging"
 )
+
+var logger = logging.New("translator/ir")
 
 type Translator struct {
 	ContributedPolicies map[schema.GroupKind]extensionsplug.PolicyPlugin
@@ -79,9 +84,11 @@ func (t *Translator) ComputeListener(
 			listener:                 lis,
 			routeConfigName:          hfc.FilterChainName,
 			fc:                       hfc.FilterChainCommon,
+			attachedPolicies:         hfc.AttachedPolicies,
 			reporter:                 reporter,
 			requireTlsOnVirtualHosts: hfc.FilterChainCommon.TLS != nil,
 			PluginPass:               pass,
+			logger:                   logger.With("route_config_name", hfc.FilterChainName),
 		}
 		rc := hr.ComputeRouteConfiguration(ctx, hfc.Vhosts)
 		if rc != nil {
@@ -116,6 +123,10 @@ func (t *Translator) ComputeListener(
 			hasTls = true
 		}
 	}
+	// sort filter chains for idempotency
+	sort.Slice(ret.GetFilterChains(), func(i, j int) bool {
+		return ret.GetFilterChains()[i].GetName() < ret.GetFilterChains()[j].GetName()
+	})
 	if hasTls {
 		ret.ListenerFilters = append(ret.GetListenerFilters(), tlsInspectorFilter())
 	}

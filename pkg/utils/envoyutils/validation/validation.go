@@ -2,13 +2,13 @@ package validation
 
 import (
 	"context"
+	"log/slog"
 
 	envoycache "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	"github.com/rotisserie/eris"
-	"github.com/solo-io/go-utils/contextutils"
 
-	"github.com/kgateway-dev/kgateway/v2/internal/envoyinit/pkg/runner"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/xds"
+	"github.com/kgateway-dev/kgateway/v2/pkg/envoyinit"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/envoyutils/bootstrap"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/envutils"
 )
@@ -27,7 +27,7 @@ const (
 )
 
 func ValidateBootstrap(ctx context.Context, bootstrap string) error {
-	return runner.RunEnvoyValidate(ctx, envutils.GetOrDefault(EnvoyBinaryEnv, defaultEnvoyPath, false), bootstrap)
+	return envoyinit.RunEnvoyValidate(ctx, envutils.GetOrDefault(EnvoyBinaryEnv, defaultEnvoyPath, false), bootstrap)
 }
 
 // ValidateSnapshot accepts an xDS snapshot, clones it, and does the necessary
@@ -47,7 +47,7 @@ func ValidateSnapshot(
 	bootstrapJson, err := bootstrap.FromSnapshot(ctx, snap)
 	if err != nil {
 		err = eris.Wrap(err, "error converting xDS snapshot to static bootstrap")
-		contextutils.LoggerFrom(ctx).Error(err)
+		slog.Error("error converting xDS snapshot to static bootstrap", "error", err)
 		return err
 	}
 

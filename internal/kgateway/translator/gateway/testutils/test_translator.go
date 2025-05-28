@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,7 +27,6 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/kgateway-dev/kgateway/v2/api/v1alpha1"
-	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
 	extensionsplug "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugin"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/registry"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
@@ -38,6 +38,7 @@ import (
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/utils/krtutil"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
 	"github.com/kgateway-dev/kgateway/v2/pkg/client/clientset/versioned/fake"
+	common "github.com/kgateway-dev/kgateway/v2/pkg/pluginsdk/collections"
 )
 
 type AssertReports func(gwNN types.NamespacedName, reportsMap reports.ReportMap)
@@ -49,10 +50,11 @@ func TestTranslation(
 	outputFile string,
 	gwNN types.NamespacedName,
 	assertReports AssertReports,
+	settingsOpts ...SettingsOpts,
 ) {
 	results, err := TestCase{
 		InputFiles: inputFiles,
-	}.Run(t, ctx)
+	}.Run(t, ctx, settingsOpts...)
 	Expect(err).NotTo(HaveOccurred())
 	// TODO allow expecting multiple gateways in the output (map nns -> outputFile?)
 	Expect(results).To(HaveLen(1))
@@ -84,7 +86,7 @@ type ActualTestResult struct {
 
 func CompareProxy(expectedFile string, actualProxy *irtranslator.TranslationResult) (string, error) {
 	if os.Getenv("UPDATE_OUTPUTS") == "1" {
-		d, err := MarshalAnyYaml(actualProxy)
+		d, err := MarshalAnyYaml(sortProxy(actualProxy))
 		if err != nil {
 			return "", err
 		}
@@ -95,7 +97,25 @@ func CompareProxy(expectedFile string, actualProxy *irtranslator.TranslationResu
 	if err != nil {
 		return "", err
 	}
-	return cmp.Diff(expectedProxy, actualProxy, protocmp.Transform(), cmpopts.EquateNaNs()), nil
+	return cmp.Diff(sortProxy(expectedProxy), sortProxy(actualProxy), protocmp.Transform(), cmpopts.EquateNaNs()), nil
+}
+
+func sortProxy(proxy *irtranslator.TranslationResult) *irtranslator.TranslationResult {
+	if proxy == nil {
+		return nil
+	}
+
+	sort.Slice(proxy.Listeners, func(i, j int) bool {
+		return proxy.Listeners[i].GetName() < proxy.Listeners[j].GetName()
+	})
+	sort.Slice(proxy.Routes, func(i, j int) bool {
+		return proxy.Routes[i].GetName() < proxy.Routes[j].GetName()
+	})
+	sort.Slice(proxy.ExtraClusters, func(i, j int) bool {
+		return proxy.ExtraClusters[i].GetName() < proxy.ExtraClusters[j].GetName()
+	})
+
+	return proxy
 }
 
 func AreReportsSuccess(gwNN types.NamespacedName, reportsMap reports.ReportMap) error {
@@ -137,6 +157,19 @@ func AreReportsSuccess(gwNN types.NamespacedName, reportsMap reports.ReportMap) 
 		}
 	}
 
+	for nns, routeReport := range reportsMap.GRPCRoutes {
+		for ref, parentRefReport := range routeReport.Parents {
+			for _, c := range parentRefReport.Conditions {
+				// most route conditions true is good, except RouteConditionPartiallyInvalid
+				if c.Type == string(gwv1.RouteConditionPartiallyInvalid) && c.Status != metav1.ConditionFalse {
+					return fmt.Errorf("condition error for grpcroute: %v ref: %v condition: %v", nns, ref, c)
+				} else if c.Status != metav1.ConditionTrue {
+					return fmt.Errorf("condition error for grpcroute: %v ref: %v condition: %v", nns, ref, c)
+				}
+			}
+		}
+	}
+
 	for nns, gwReport := range reportsMap.Gateways {
 		for _, c := range gwReport.GetConditions() {
 			if c.Status != metav1.ConditionTrue {
@@ -148,27 +181,15 @@ func AreReportsSuccess(gwNN types.NamespacedName, reportsMap reports.ReportMap) 
 	return nil
 }
 
-var _ extensionsplug.GetBackendForRefPlugin = testBackendPlugin{}.GetBackendForRefPlugin
+type SettingsOpts func(*settings.Settings)
 
-type testBackendPlugin struct{}
-
-// GetBackendForRef implements query.BackendRefResolver.
-func (tp testBackendPlugin) GetBackendForRefPlugin(kctx krt.HandlerContext, key ir.ObjectSource, port int32) *ir.BackendObjectIR {
-	if key.Kind != "test-backend-plugin" {
-		return nil
-	}
-	// doesn't matter as long as its not nil
-	return &ir.BackendObjectIR{
-		ObjectSource: ir.ObjectSource{
-			Group:     "test",
-			Kind:      "test-backend-plugin",
-			Namespace: "test-backend-plugin-ns",
-			Name:      "test-backend-plugin-us",
-		},
+func SettingsWithDiscoveryNamespaceSelectors(cfgJson string) SettingsOpts {
+	return func(s *settings.Settings) {
+		s.DiscoveryNamespaceSelectors = cfgJson
 	}
 }
 
-func (tc TestCase) Run(t test.Failer, ctx context.Context) (map[types.NamespacedName]ActualTestResult, error) {
+func (tc TestCase) Run(t test.Failer, ctx context.Context, settingsOpts ...SettingsOpts) (map[types.NamespacedName]ActualTestResult, error) {
 	var (
 		anyObjs []runtime.Object
 		ourObjs []runtime.Object
@@ -200,6 +221,7 @@ func (tc TestCase) Run(t test.Failer, ctx context.Context) (map[types.Namespaced
 		gvr.KubernetesGateway_v1,
 		gvr.GatewayClass,
 		gvr.HTTPRoute_v1,
+		gvr.GRPCRoute,
 		gvr.Service,
 		gvr.Pod,
 		gvr.TCPRoute,
@@ -236,7 +258,11 @@ func (tc TestCase) Run(t test.Failer, ctx context.Context) (map[types.Namespaced
 	if err != nil {
 		return nil, err
 	}
-	commoncol := common.NewCommonCollections(
+	for _, opt := range settingsOpts {
+		opt(st)
+	}
+
+	commoncol, err := common.NewCommonCollections(
 		ctx,
 		krtOpts,
 		cli,
@@ -246,6 +272,9 @@ func (tc TestCase) Run(t test.Failer, ctx context.Context) (map[types.Namespaced
 		logr.Discard(),
 		*st,
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	plugins := registry.Plugins(ctx, commoncol)
 	// TODO: consider moving the common code to a util that both proxy syncer and this test call
@@ -257,8 +286,19 @@ func (tc TestCase) Run(t test.Failer, ctx context.Context) (map[types.Namespaced
 		Kind:  "test-backend-plugin",
 	}
 	extensions.ContributesPolicies[gk] = extensionsplug.PolicyPlugin{
-		Name:             "test-backend-plugin",
-		GetBackendForRef: testBackendPlugin{}.GetBackendForRefPlugin,
+		Name: "test-backend-plugin",
+	}
+	extensions.ContributesBackends[gk] = extensionsplug.BackendPlugin{
+		Backends: krt.NewStaticCollection([]ir.BackendObjectIR{
+			{
+				Port: 80,
+				ObjectSource: ir.ObjectSource{
+					Kind:      "test-backend-plugin",
+					Namespace: "default",
+					Name:      "example-svc",
+				},
+			},
+		}),
 	}
 
 	commoncol.InitPlugins(ctx, extensions)

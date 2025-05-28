@@ -2,70 +2,70 @@ package setup
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"net"
-	"os"
 
 	envoycache "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	xdsserver "github.com/envoyproxy/go-control-plane/pkg/server/v3"
-	"github.com/go-logr/zapr"
-	"github.com/solo-io/go-utils/contextutils"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"github.com/go-logr/logr"
 	istiokube "istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/krt"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-	zaputil "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/admin"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/controller"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/common"
-	extensionsplug "github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/plugin"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/extensions2/settings"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/krtcollections"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/utils/krtutil"
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
-	"github.com/kgateway-dev/kgateway/v2/internal/version"
+	"github.com/kgateway-dev/kgateway/v2/pkg/logging"
+	sdk "github.com/kgateway-dev/kgateway/v2/pkg/pluginsdk"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/envutils"
 )
 
-const (
-	componentName = "kgateway"
-)
-
-func Main(customCtx context.Context) error {
-	SetupLogging(customCtx, componentName)
-	return startSetupLoop(customCtx)
+type Server interface {
+	Start(ctx context.Context) error
 }
 
-func startSetupLoop(ctx context.Context) error {
-	return StartKgateway(ctx, nil)
-}
-
-func createKubeClient(restConfig *rest.Config) (istiokube.Client, error) {
-	restCfg := istiokube.NewClientConfigForRestConfig(restConfig)
-	client, err := istiokube.NewClient(restCfg, "")
-	if err != nil {
-		return nil, err
+func WithExtraPlugins(extraPlugins func(ctx context.Context, commoncol *common.CommonCollections) []sdk.Plugin) func(*setup) {
+	return func(s *setup) {
+		s.extraPlugins = extraPlugins
 	}
-	istiokube.EnableCrdWatcher(client)
-	return client, nil
+}
+
+type setup struct {
+	extraPlugins func(ctx context.Context, commoncol *common.CommonCollections) []sdk.Plugin
+}
+
+var _ Server = &setup{}
+
+func New(opts ...func(*setup)) *setup {
+	s := &setup{}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func (s *setup) Start(ctx context.Context) error {
+	return StartKgateway(ctx, s.extraPlugins)
 }
 
 func StartKgateway(
 	ctx context.Context,
-	extraPlugins func(ctx context.Context, commoncol *common.CommonCollections) []extensionsplug.Plugin,
+	extraPlugins func(ctx context.Context, commoncol *common.CommonCollections) []sdk.Plugin,
 ) error {
-	logger := contextutils.LoggerFrom(ctx)
-
 	// load global settings
 	st, err := settings.BuildSettings()
 	if err != nil {
-		logger.Error(err, "got err while parsing Settings from env")
+		slog.Error("error loading settings from env", "error", err)
 	}
-	logger.Info(fmt.Sprintf("got settings from env: %+v", *st))
+
+	setupLogging(st.LogLevel)
+	slog.Info("global settings loaded", "settings", *st)
 
 	uniqueClientCallbacks, uccBuilder := krtcollections.NewUniquelyConnectedClients()
 	cache, err := startControlPlane(ctx, st.XdsServicePort, uniqueClientCallbacks)
@@ -99,18 +99,16 @@ func StartKgatewayWithConfig(
 	setupOpts *controller.SetupOpts,
 	restConfig *rest.Config,
 	uccBuilder krtcollections.UniquelyConnectedClientsBulider,
-	extraPlugins func(ctx context.Context, commoncol *common.CommonCollections) []extensionsplug.Plugin,
+	extraPlugins func(ctx context.Context, commoncol *common.CommonCollections) []sdk.Plugin,
 ) error {
-	ctx = contextutils.WithLogger(ctx, "k8s")
-	logger := contextutils.LoggerFrom(ctx)
-	logger.Infof("starting %s", componentName)
+	slog.Info("starting kgateway")
 
 	kubeClient, err := createKubeClient(restConfig)
 	if err != nil {
 		return err
 	}
 
-	logger.Info("creating krt collections")
+	slog.Info("creating krt collections")
 	krtOpts := krtutil.NewKrtOptions(ctx.Done(), setupOpts.KrtDebugger)
 
 	augmentedPods := krtcollections.NewPodsCollection(kubeClient, krtOpts)
@@ -121,7 +119,7 @@ func StartKgatewayWithConfig(
 
 	ucc := uccBuilder(ctx, krtOpts, augmentedPodsForUcc)
 
-	logger.Info("initializing controller")
+	slog.Info("initializing controller")
 	c, err := controller.NewControllerBuilder(ctx, controller.StartConfig{
 		// TODO: why do we plumb this through if it's wellknown?
 		ControllerName: wellknown.GatewayControllerName,
@@ -131,48 +129,50 @@ func StartKgatewayWithConfig(
 		Client:         kubeClient,
 		AugmentedPods:  augmentedPods,
 		UniqueClients:  ucc,
-
-		// Dev flag may be useful for development purposes; not currently tied to any user-facing API
-		Dev:        os.Getenv("LOG_LEVEL") == "debug",
-		KrtOptions: krtOpts,
+		Dev:            logging.MustGetLevel(logging.DefaultComponent) <= logging.LevelTrace,
+		KrtOptions:     krtOpts,
 	})
 	if err != nil {
-		logger.Error("failed initializing controller: ", err)
+		slog.Error("failed initializing controller: ", "error", err)
 		return err
 	}
-	/// no collections after this point
 
-	logger.Info("waiting for cache sync")
+	slog.Info("waiting for cache sync")
 	kubeClient.RunAndWait(ctx.Done())
 
-	logger.Info("starting admin server")
+	slog.Info("starting admin server")
 	go admin.RunAdminServer(ctx, setupOpts)
 
-	logger.Info("starting controller")
+	slog.Info("starting controller")
 	return c.Start(ctx)
 }
 
-// SetupLogging sets up controller-runtime logging
-func SetupLogging(ctx context.Context, loggerName string) {
-	level := zapcore.InfoLevel
-	// if log level is set in env, use that
-	if envLogLevel := os.Getenv(contextutils.LogLevelEnvName); envLogLevel != "" {
-		if err := (&level).Set(envLogLevel); err != nil {
-			contextutils.LoggerFrom(ctx).Infof("Could not set log level from env %s=%s, available levels "+
-				"can be found here: https://pkg.go.dev/go.uber.org/zap/zapcore?tab=doc#Level",
-				contextutils.LogLevelEnvName,
-				envLogLevel,
-				zap.Error(err),
-			)
-		}
+// setupLogging configures the global slog logger
+func setupLogging(levelStr string) {
+	if levelStr == "" {
+		return
 	}
-	atomicLevel := zap.NewAtomicLevelAt(level)
+	level, err := logging.ParseLevel(levelStr)
+	if err != nil {
+		slog.Error("failed to parse log level, defaulting to info", "error", err)
+		return
+	}
+	// set all loggers to the specified level
+	logging.Reset(level)
+	// set controller-runtime logger
+	controllerLogger := logr.FromSlogHandler(logging.New("controller-runtime").Handler())
+	ctrl.SetLogger(controllerLogger)
+	// set klog logger
+	klogLogger := logr.FromSlogHandler(logging.New("klog").Handler())
+	klog.SetLogger(klogLogger)
+}
 
-	baseLogger := zaputil.NewRaw(
-		zaputil.Level(&atomicLevel),
-		zaputil.RawZapOpts(zap.Fields(zap.String("version", version.Version))),
-	).Named(loggerName)
-
-	// controller-runtime
-	log.SetLogger(zapr.NewLogger(baseLogger))
+func createKubeClient(restConfig *rest.Config) (istiokube.Client, error) {
+	restCfg := istiokube.NewClientConfigForRestConfig(restConfig)
+	client, err := istiokube.NewClient(restCfg, "")
+	if err != nil {
+		return nil, err
+	}
+	istiokube.EnableCrdWatcher(client)
+	return client, nil
 }
