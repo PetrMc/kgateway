@@ -99,7 +99,7 @@ func (sw selectedWorkload) Equals(o selectedWorkload) bool {
 		maps.Equal(sw.portMapping, o.portMapping)
 }
 
-type serviceEntryPlugin struct {
+type ServiceEntryPlugin struct {
 	logger *slog.Logger
 
 	// core inputs
@@ -116,9 +116,9 @@ type serviceEntryPlugin struct {
 	Endpoints krt.Collection[ir.EndpointsForBackend]
 }
 
-func initServiceEntryCollections(
+func InitServiceEntryCollections(
 	commonCols *common.CommonCollections,
-) serviceEntryPlugin {
+) ServiceEntryPlugin {
 	// setup input collections
 	weInformer := kclient.NewDelayedInformer[*networkingclient.WorkloadEntry](
 		commonCols.Client,
@@ -142,7 +142,7 @@ func initServiceEntryCollections(
 	Backends := backendsCollections(logger, commonCols.ServiceEntries, commonCols.KrtOpts)
 	Endpoints := endpointsCollection(Backends, SelectedWorkloads, selectedWorkloadsIndex, commonCols.KrtOpts)
 
-	return serviceEntryPlugin{
+	return ServiceEntryPlugin{
 		logger: logger,
 
 		ServiceEntries:  commonCols.ServiceEntries,
@@ -157,7 +157,7 @@ func initServiceEntryCollections(
 	}
 }
 
-func (s *serviceEntryPlugin) HasSynced() bool {
+func (s *ServiceEntryPlugin) HasSynced() bool {
 	if s == nil {
 		return false
 	}

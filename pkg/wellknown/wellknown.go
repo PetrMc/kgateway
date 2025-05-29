@@ -10,7 +10,6 @@ import (
 var (
 	ServiceEntryGVK = internal.ServiceEntryGVK
 	HostnameGVK     = internal.HostnameGVK
-
 )
 
 // To confirm if needed to re-export GVKs as GroupKind

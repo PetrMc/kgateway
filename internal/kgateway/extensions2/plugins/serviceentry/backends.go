@@ -19,7 +19,7 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-func (s *serviceEntryPlugin) initServiceEntryBackend(ctx context.Context, in ir.BackendObjectIR, out *clusterv3.Cluster) *ir.EndpointsForBackend {
+func (s *ServiceEntryPlugin) initServiceEntryBackend(ctx context.Context, in ir.BackendObjectIR, out *clusterv3.Cluster) *ir.EndpointsForBackend {
 	se, ok := in.Obj.(*networkingclient.ServiceEntry)
 	if !ok {
 		return nil
@@ -62,7 +62,7 @@ func (s *serviceEntryPlugin) initServiceEntryBackend(ctx context.Context, in ir.
 		// STATIC with inline endpoints, or either kind of DNS require an inline load assignment
 
 		// compute endpoints from ServiceEntry
-		staticEps = s.buildInlineEndpoints(ctx, in, se)
+		staticEps = s.buildInlineEndpoints(in, se)
 	}
 	return staticEps
 }

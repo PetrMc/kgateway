@@ -22,7 +22,7 @@ func NewPlugin(
 	_ context.Context,
 	commonCols *common.CommonCollections,
 ) extensionsplug.Plugin {
-	seCollections := initServiceEntryCollections(commonCols)
+	seCollections := InitServiceEntryCollections(commonCols)
 	return extensionsplug.Plugin{
 		ContributesBackends: map[schema.GroupKind]extensionsplug.BackendPlugin{
 			wellknown.ServiceEntryGVK.GroupKind(): {
