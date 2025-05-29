@@ -21,4 +21,4 @@ Replace <crd-name> with the name of the CRD(s) you wish to delete. For example:
 
 To learn how to access and use kgateway, please visit the official documentation:
 
-  https://kgateway.dev/docs/
+  https://kgateway.dev/docs/about/custom-resources/#kgateway
