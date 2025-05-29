@@ -1,7 +1,7 @@
 package serviceentry
 
 import (
-	"context"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
