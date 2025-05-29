@@ -181,14 +181,6 @@ func AreReportsSuccess(gwNN types.NamespacedName, reportsMap reports.ReportMap) 
 	return nil
 }
 
-type SettingsOpts func(*settings.Settings)
-
-func SettingsWithDiscoveryNamespaceSelectors(cfgJson string) SettingsOpts {
-	return func(s *settings.Settings) {
-		s.DiscoveryNamespaceSelectors = cfgJson
-	}
-}
-
 func (tc TestCase) Run(t test.Failer, ctx context.Context, settingsOpts ...SettingsOpts) (map[types.NamespacedName]ActualTestResult, error) {
 	var (
 		anyObjs []runtime.Object
