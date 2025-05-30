@@ -28,6 +28,7 @@ type BackendInit struct {
 	InitBackend func(ctx context.Context, in BackendObjectIR, out *envoy_config_cluster_v3.Cluster) *EndpointsForBackend
 }
 
+
 type PolicyRef struct {
 	Group       string
 	Kind        string
