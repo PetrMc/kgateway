@@ -2,12 +2,9 @@ package waypointquery
 
 import (
 	"context"
-	"fmt"
 
 	authcr "istio.io/client-go/pkg/apis/security/v1"
-	"istio.io/istio/pilot/pkg/serviceregistry/provider"
 	"istio.io/istio/pkg/kube/krt"
-	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/types"
 	gwapi "sigs.k8s.io/gateway-api/apis/v1"
