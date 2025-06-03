@@ -3,6 +3,7 @@ package serviceentry
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -73,7 +74,15 @@ func endpointsCollection(
 			if !isEDSServiceEntry(se) {
 				return nil
 			}
-			workloads := krt.Fetch(ctx, SelectedWorkloads, krt.FilterIndex(selectedWorkloadsIndex, serviceEntryKey(se)))
+			lookupKey := serviceEntryKey(se)
+			log.Printf("[GG/SE] DEBUG: Looking up workloads for ServiceEntry key: %s", lookupKey)
+
+			workloads := krt.Fetch(ctx, SelectedWorkloads, krt.FilterIndex(selectedWorkloadsIndex, lookupKey))
+
+			log.Printf("[GG/SE] DEBUG: Found %d workloads for key %s", len(workloads), lookupKey)
+			for _, w := range workloads {
+				log.Printf("[GG/SE] DEBUG: Workload found: %s/%s IP=%s", w.Namespace, w.Name, w.Address())
+			}
 
 			return endpointsFromWorkloads(se, be, workloads)
 		},
@@ -91,7 +100,10 @@ func endpointsFromWorkloads(
 	be ir.BackendObjectIR,
 	workloads []selectedWorkload,
 ) *ir.EndpointsForBackend {
+	log.Printf("[GG/SE] DEBUG: endpointsFromWorkloads called with %d workloads for backend %s", 
+	len(workloads), be.CanonicalHostname)
 	if len(workloads) == 0 {
+		log.Printf("[GG/SE] DEBUG: No workloads, returning empty endpoints")
 		return ir.NewEndpointsForBackend(be)
 	}
 
@@ -104,16 +116,27 @@ func endpointsFromWorkloads(
 			break
 		}
 	}
+	if servicePort == nil {
+        log.Printf("[GG/SE] DEBUG: No matching service port found for backend port %d", be.Port)
+        return ir.NewEndpointsForBackend(be)
+    }
 
 	seTargetPort := be.Port
 	if sePortTargetPort := servicePort.GetTargetPort(); sePortTargetPort > 0 {
 		seTargetPort = int32(sePortTargetPort)
 	}
 
+	log.Printf("[GG/SE] DEBUG: Using target port %d for backend port %d", seTargetPort, be.Port)
+
 	eps := ir.NewEndpointsForBackend(be)
-	for _, workload := range workloads {
+	endpointsAdded := 0
+	for i, workload := range workloads {
+		log.Printf("[GG/SE] DEBUG: Processing workload %d: %s/%s IP=%s", 
+		i, workload.Namespace, workload.Name, workload.Address())
 		address := workload.Address()
 		if address == "" {
+			log.Printf("[GG/SE] DEBUG: Skipping workload %s/%s - no IP", 
+			workload.Namespace, workload.Name)
 			continue
 		}
 
@@ -137,10 +160,17 @@ func endpointsFromWorkloads(
 				Labels: workload.AugmentedLabels,
 			},
 		}
+        log.Printf("[GG/SE] DEBUG: Added endpoint %s:%d for workload %s/%s", 
+            address, seTargetPort, workload.Namespace, workload.Name)
+
 		if workload.weight > 0 {
 			ep.LbEndpoint.LoadBalancingWeight = &wrapperspb.UInt32Value{Value: workload.weight}
 		}
 		eps.Add(workload.Locality, ep)
+		endpointsAdded++
 	}
+
+	log.Printf("[GG/SE] DEBUG: Successfully added %d endpoints from %d workloads for backend %s", 
+		endpointsAdded, len(workloads), be.CanonicalHostname)
 	return eps
 }

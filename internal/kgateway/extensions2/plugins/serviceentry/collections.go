@@ -1,6 +1,7 @@
 package serviceentry
 
 import (
+	"log"
 	"log/slog"
 	"strings"
 
@@ -185,6 +186,16 @@ func selectedWorkloads(
 		actualNs := o.GetNamespace()
 		namespaces := []string{actualNs}
 		// TODO peering should also include the parent namespace
+
+		if parentNs, exists := o.GetLabels()["solo.io/parent-service-namespace"]; exists && parentNs != "" && parentNs != actualNs {
+			namespaces = append(namespaces, parentNs) // Add parent namespace
+			log.Printf("[GG/SE] ServiceEntry %s/%s will select workloads from namespaces: %v (SE namespace: %s, parent: %s)",
+				actualNs, o.GetName(), namespaces, actualNs, parentNs)
+		} else {
+			log.Printf("[GG/SE] ServiceEntry %s/%s will select workloads from namespace: %s (no parent)",
+				actualNs, o.GetName(), actualNs)
+		}
+
 		return namespaces
 	})
 
@@ -223,11 +234,20 @@ func selectedWorkloads(
 		if len(serviceEntries) == 0 {
 			return nil
 		}
+
+		log.Printf("[GG/SE] Pod %s/%s selected by %d ServiceEntries", 
+		workload.Namespace, workload.Name, len(serviceEntries))
+
+		selectedByList := slices.Map(serviceEntries, func(s seSelector) krt.Named {
+			named := krt.NewNamed(s)
+			log.Printf("[GG/SE] DEBUG: Pod %s/%s selectedBy ResourceName: %s", 
+				workload.Namespace, workload.Name, named.ResourceName())
+			return named
+		})
+
 		return &selectedWorkload{
 			LocalityPod: workload,
-			selectedBy: slices.Map(serviceEntries, func(s seSelector) krt.Named {
-				return krt.NewNamed(s)
-			}),
+			selectedBy: selectedByList,
 			network: workload.AugmentedLabels[label.TopologyNetwork.Name],
 		}
 	}, krt.WithName("ServiceEntrySelectPod"))
@@ -235,9 +255,13 @@ func selectedWorkloads(
 	// consolidate Pods and WorkloadEntries
 	allWorkloads := krt.JoinCollection([]krt.Collection[selectedWorkload]{selectedPods, selectedWorkloadEntries}, krt.WithName("ServiceEntrySelectWorkloads"))
 	workloadsByServiceEntry := krt.NewIndex(allWorkloads, func(o selectedWorkload) []string {
-		return slices.Map(o.selectedBy, func(n krt.Named) string {
-			return n.ResourceName()
+		keys := slices.Map(o.selectedBy, func(n krt.Named) string {
+			key := n.ResourceName()
+			log.Printf("[GG/SE] DEBUG: Index key for workload %s/%s: %s", 
+				o.Namespace, o.Name, key)
+			return key
 		})
+		return keys
 	})
 	return allWorkloads, workloadsByServiceEntry
 }
