@@ -50,6 +50,7 @@ type CommonCollections struct {
 	// or even better, be removed entirely and done per Gateway (maybe in GwParams)
 	Settings       settings.Settings
 	controllerName string
+	IstioNetwork   krt.Singleton[string]
 }
 
 func (c *CommonCollections) HasSynced() bool {

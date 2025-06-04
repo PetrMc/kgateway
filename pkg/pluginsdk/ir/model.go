@@ -34,7 +34,8 @@ type UniqlyConnectedClient struct {
 	// modified role that includes the namespace and the hash of the labels.
 	// we set the client's role to this value in the node metadata. so the snapshot key in the cache
 	// should also be set to this value.
-	resourceName string
+	resourceName    string
+	AmbientCaptured bool
 }
 
 func (c UniqlyConnectedClient) ResourceName() string {
@@ -95,10 +96,10 @@ type EndpointsForBackend struct {
 	UpstreamResourceName string
 	Port                 uint32
 	Hostname             string
-
-	LbEpsEqualityHash uint64
-	upstreamHash      uint64
-	epsEqualityHash   uint64
+	BackendLabels        map[string]string
+	LbEpsEqualityHash    uint64
+	UpstreamHash         uint64
+	epsEqualityHash      uint64
 }
 
 func NewEndpointsForBackend(us BackendObjectIR) *EndpointsForBackend {
@@ -115,7 +116,7 @@ func NewEndpointsForBackend(us BackendObjectIR) *EndpointsForBackend {
 	h.Write([]byte(us.Name))
 	h.Write([]byte{0})
 	h.Write([]byte(us.Namespace))
-	upstreamHash := h.Sum64()
+	UpstreamHash := h.Sum64()
 
 	return &EndpointsForBackend{
 		LbEps:                make(map[PodLocality][]EndpointWithMd),
@@ -123,8 +124,9 @@ func NewEndpointsForBackend(us BackendObjectIR) *EndpointsForBackend {
 		UpstreamResourceName: us.ResourceName(),
 		Port:                 uint32(us.Port),
 		Hostname:             us.CanonicalHostname,
-		LbEpsEqualityHash:    upstreamHash,
-		upstreamHash:         upstreamHash,
+		BackendLabels:        make(map[string]string),
+		LbEpsEqualityHash:    UpstreamHash,
+		UpstreamHash:         UpstreamHash,
 	}
 }
 
@@ -155,7 +157,7 @@ func (e *EndpointsForBackend) Add(l PodLocality, emd EndpointWithMd) {
 	// we can't xor the endpoint hash with the upstream hash, because upstreams with
 	// different names and similar endpoints will cancel out, so endpoint changes
 	// won't result in different equality hashes.
-	e.LbEpsEqualityHash = hash(e.epsEqualityHash, e.upstreamHash)
+	e.LbEpsEqualityHash = hash(e.epsEqualityHash, e.UpstreamHash)
 	e.LbEps[l] = append(e.LbEps[l], emd)
 }
 
