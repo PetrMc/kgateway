@@ -124,7 +124,9 @@ func (w *waypointQueries) GetHTTPRoutesForService(
 	seen := sets.New[types.NamespacedName]()
 	for _, key := range svc.Keys() {
 		nns := types.NamespacedName{
-			Namespace: key.GetNamespace(),
+			// TODO  routes index requires a namespace
+			// meaning global references (such as Hostname) are effectively namespace-local
+			Namespace: getEffectiveNamespace(key.GetNamespace(), svc.GetNamespace()),
 			Name:      key.GetName(),
 		}
 		routes := w.commonCols.Routes.RoutesFor(kctx, nns, key.Group, key.Kind)
@@ -141,7 +143,7 @@ func (w *waypointQueries) GetHTTPRoutesForService(
 				key,
 				route.GetNamespace(),
 				route.GetParentRefs(),
-				svc.GroupKind,
+				key.GetGroupKind(),
 			)
 			if pRef == nil {
 				return nil
@@ -163,14 +165,24 @@ func findParentRef(
 	// TODO peering will need to consider original and simulated GK
 	matchingParentRefs := findParentRefsForType(parentRefs, gk.Group, gk.Kind)
 	for _, pr := range matchingParentRefs {
+		if string(pr.Name) != key.GetName() {
+			continue
+		}
+
+		// global key, no namespace
+		if key.GetNamespace() == "" && pr.Namespace == nil {
+			return pr
+		}
+
 		// default to routes's own ns if not specified on the ref
 		ns := routeNs
 		if pr.Namespace != nil {
 			ns = string(*pr.Namespace)
 		}
-		if string(pr.Name) == key.GetName() && ns == key.GetNamespace() {
+		if key.GetNamespace() == ns {
 			return pr
 		}
+
 	}
 	return nil
 }
@@ -332,8 +344,8 @@ func getAliases(
 		return nil
 	}
 	objSrc := ir.ObjectSource{
-		Group:     wellknown.ServiceEntryGVK.Kind,
-		Kind:      wellknown.ServiceEntryGVK.Group,
+		Group:     wellknown.ServiceEntryGVK.Group,
+		Kind:      wellknown.ServiceEntryGVK.Kind,
 		Namespace: se.GetNamespace(),
 		Name:      se.GetName(),
 	}
