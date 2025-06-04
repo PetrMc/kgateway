@@ -338,7 +338,7 @@ func getAliases(
 	commonCols *common.CommonCollections,
 	se *networkingclient.ServiceEntry,
 ) []ir.ObjectSource {
-	if len(se.Spec.Ports) == 0 {
+	if len(se.Spec.GetPorts()) == 0 {
 		// require a port since we find aliases via BackendIndex
 		// this is fine b/c a ServiceEntry with no ports isn't reachable via waypoint
 		return nil
@@ -354,7 +354,7 @@ func getAliases(
 		Kind:      ptr.To(gwv1.Kind(objSrc.Kind)),
 		Name:      gwv1.ObjectName(objSrc.Name),
 		Namespace: ptr.To(gwv1.Namespace(objSrc.Namespace)),
-		Port:      ptr.To(gwv1.PortNumber(se.Spec.Ports[0].GetNumber())),
+		Port:      ptr.To(gwv1.PortNumber(se.Spec.GetPorts()[0].GetNumber())),
 	})
 	if be == nil {
 		return nil
