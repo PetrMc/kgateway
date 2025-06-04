@@ -119,7 +119,6 @@ func (w *waypointQueries) GetHTTPRoutesForService(
 	ctx context.Context,
 	svc *Service,
 ) []query.RouteInfo {
-
 	var out []query.RouteInfo
 	seen := sets.New[types.NamespacedName]()
 	for _, key := range svc.Keys() {
@@ -182,7 +181,6 @@ func findParentRef(
 		if key.GetNamespace() == ns {
 			return pr
 		}
-
 	}
 	return nil
 }
@@ -306,7 +304,6 @@ func waypointAttachmentIndex(
 	krt.Index[types.NamespacedName, WaypointedService],
 	krt.Index[string, WaypointedService],
 ) {
-
 	// do basic attachment logic
 	waypointServiceAttachments := krt.JoinCollection(
 		[]krt.Collection[WaypointedService]{
