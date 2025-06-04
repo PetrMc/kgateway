@@ -156,6 +156,8 @@ func NewCommonCollections(
 		GatewayExtensions: gwExts,
 
 		controllerName: controllerName,
+		IstioNetwork:      istionetwork.ClusterDefaultSingleton(namespaces, settings, krtOptions),
+
 	}, nil
 }
 

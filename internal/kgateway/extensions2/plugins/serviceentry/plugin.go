@@ -22,7 +22,9 @@ func NewPlugin(
 	_ context.Context,
 	commonCols *common.CommonCollections,
 ) extensionsplug.Plugin {
+	fmt.Println("[GG/PLUGIN] Starting ServiceEntry plugin")
 	seCollections := initServiceEntryCollections(commonCols)
+	fmt.Println("[GG/PLUGIN] ServiceEntry plugin initialized", seCollections)
 	return extensionsplug.Plugin{
 		ContributesBackends: map[schema.GroupKind]extensionsplug.BackendPlugin{
 			wellknown.ServiceEntryGVK.GroupKind(): {
