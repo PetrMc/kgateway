@@ -237,7 +237,7 @@ spec:
 # we just include one here and expect it to do nothing
 # this acts as an assertion that we don't push invalid envoy and cause NACKs (due to invalid LbAddr)
 ##################################################################################################
-
+---
 apiVersion: networking.istio.io/v1beta1
 kind: WorkloadEntry
 metadata:
