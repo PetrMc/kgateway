@@ -277,9 +277,11 @@ func doWaypointAttachment(
 			}
 		}
 
-		return &WaypointedService{
-			Waypoint: *waypoint,
-			Service:  svc,
+		if waypoint != nil {
+			return &WaypointedService{
+				Waypoint: *waypoint,
+				Service:  svc,
+			}
 		}
 	}
 	return nil
@@ -342,6 +344,9 @@ func getAliases(
 		Namespace: ptr.To(gwv1.Namespace(objSrc.Namespace)),
 		Port:      ptr.To(gwv1.PortNumber(se.Spec.Ports[0].GetNumber())),
 	})
+	if be == nil {
+		return nil
+	}
 	return be.Aliases
 }
 
