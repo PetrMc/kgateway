@@ -149,7 +149,7 @@ func prioritizeWithLbInfo(logger *slog.Logger, ep ir.EndpointsForBackend, lbInfo
 	return cla
 }
 
-// ensure we don't send invlid endpoints to envoy and cause NACKs
+// ensure we don't send invalid endpoints to envoy and cause NACKs
 func filterInvalidEps(eps []ir.EndpointWithMd) []ir.EndpointWithMd {
 	return slices.Filter(eps, func(ewm ir.EndpointWithMd) bool {
 		sock := ewm.GetEndpoint().GetAddress().GetSocketAddress()
