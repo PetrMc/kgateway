@@ -237,12 +237,13 @@ spec:
 # we just include one here and expect it to do nothing
 # this acts as an assertion that we don't push invalid envoy and cause NACKs (due to invalid LbAddr)
 ##################################################################################################
----
-apiVersion: networking.istio.io/v1beta1
-kind: WorkloadEntry
-metadata:
-  name: empty-addr-workloadentry
-  labels:
-    app: svc-b
-spec:
-  network: some-external-network
+# TODO: This is pending Istio version that included this PR: https://github.com/istio/ztunnel/pull/1570 
+# ---
+# apiVersion: networking.istio.io/v1beta1
+# kind: WorkloadEntry
+# metadata:
+#   name: empty-addr-workloadentry
+#   labels:
+#     app: svc-b
+# spec:
+#   network: some-external-network
