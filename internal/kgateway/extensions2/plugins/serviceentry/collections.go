@@ -260,11 +260,8 @@ func selectedWorkloadFromEntry(
 
 	// WorkloadEntry has a field for network, but we should also respect the label.
 	network := weSpec.GetNetwork()
-	if network == "" && labels[label.TopologyNetwork.Name] != "" {
-		network = labels[label.TopologyNetwork.Name]
-	}
-
-	// Propagate the network from spec into labels so downstream plugins can access it
+	// spec network takes priority
+	// we propagate it to the labels so that endpoint plugins can see it
 	if network != "" {
 		labels[label.TopologyNetwork.Name] = network
 	}
