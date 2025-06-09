@@ -269,6 +269,8 @@ func selectedWorkloadFromEntry(
 
 	// WorkloadEntry has a field for network, but we should also respect the label.
 	network := weSpec.GetNetwork()
+	// Note: spec.network is typically required, so this fallback may rarely trigger,
+	// but it's good defensive for edge cases
 	if network == "" && labels[label.TopologyNetwork.Name] != "" {
 		network = labels[label.TopologyNetwork.Name]
 	}
