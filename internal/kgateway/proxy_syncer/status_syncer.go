@@ -125,6 +125,10 @@ func (s *StatusSyncer) Start(ctx context.Context) error {
 }
 
 func (s *StatusSyncer) syncRouteStatus(ctx context.Context, logger *slog.Logger, rm reports.ReportMap) {
+	logger.Info("DEBUG: proxy_syncer syncRouteStatus starting", "httpRoutes", len(rm.HTTPRoutes))
+    for rnn := range rm.HTTPRoutes {
+        logger.Info("DEBUG: proxy_syncer found HTTPRoute", "route", rnn.String())
+    }
 	stopwatch := utils.NewTranslatorStopWatch("RouteStatusSyncer")
 	stopwatch.Start()
 	defer stopwatch.Stop(ctx)

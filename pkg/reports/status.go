@@ -20,6 +20,93 @@ import (
 	pluginsdkreporter "github.com/kgateway-dev/kgateway/v2/pkg/pluginsdk/reporter"
 )
 
+func getAllSupportedRouteKinds() []gwv1.RouteGroupKind {
+	gatewayGroup := gwv1.Group("gateway.networking.k8s.io")
+	return []gwv1.RouteGroupKind{
+		{Group: &gatewayGroup, Kind: "HTTPRoute"},
+		{Group: &gatewayGroup, Kind: "GRPCRoute"},
+		{Group: &gatewayGroup, Kind: "TCPRoute"},
+		{Group: &gatewayGroup, Kind: "TLSRoute"},
+	}
+}
+
+// getSupportedKindsForListener returns only the kinds that are both:
+// 1. Supported by the controller
+// 2. Allowed by the listener (if specified)
+func getSupportedKindsForListener(listener gwv1.Listener) []gwv1.RouteGroupKind {
+	fmt.Printf("DEBUG: getSupportedKindsForListener called for %s\n", listener.Name)
+
+	allSupportedKinds := getAllSupportedRouteKinds()
+	fmt.Printf("DEBUG: allSupportedKinds = %d\n", len(allSupportedKinds))
+
+	// If no allowedRoutes.kinds specified, return all supported kinds
+	if listener.AllowedRoutes == nil || len(listener.AllowedRoutes.Kinds) == 0 {
+		fmt.Printf("DEBUG: No allowedRoutes, returning all %d kinds\n", len(allSupportedKinds))
+		return allSupportedKinds
+	}
+
+	fmt.Printf("DEBUG: Listener has %d allowed kinds\n", len(listener.AllowedRoutes.Kinds))
+	for i, allowedKind := range listener.AllowedRoutes.Kinds {
+		groupStr := "nil"
+		if allowedKind.Group != nil {
+			groupStr = string(*allowedKind.Group) // Fix: convert gwv1.Group to string
+		}
+		fmt.Printf("DEBUG: allowedKind[%d] = Group:%s, Kind:%s\n", i, groupStr, allowedKind.Kind)
+	}
+
+	// Return intersection: only kinds that are both allowed and supported
+	var supportedKinds []gwv1.RouteGroupKind
+	for _, allowedKind := range listener.AllowedRoutes.Kinds {
+		fmt.Printf("DEBUG: Checking if %s is supported...\n", allowedKind.Kind)
+		for _, supportedKind := range allSupportedKinds {
+			if allowedKind.Kind == supportedKind.Kind {
+				fmt.Printf("DEBUG: Kind match: %s == %s\n", allowedKind.Kind, supportedKind.Kind)
+				// Also check group if specified
+				if allowedKind.Group == nil || supportedKind.Group == nil ||
+					*allowedKind.Group == *supportedKind.Group {
+					fmt.Printf("DEBUG: Adding %s to supported kinds\n", allowedKind.Kind)
+					supportedKinds = append(supportedKinds, supportedKind)
+					break
+				} else {
+					fmt.Printf("DEBUG: Group mismatch: %s != %s\n",
+						string(*allowedKind.Group), string(*supportedKind.Group)) // Fix: convert to string
+				}
+			}
+		}
+	}
+
+	fmt.Printf("DEBUG: Returning %d supported kinds\n", len(supportedKinds))
+
+	return supportedKinds
+}
+
+// validateListenerRouteKinds checks if the listener has any invalid route kinds
+func validateListenerRouteKinds(listener gwv1.Listener, supportedKinds []gwv1.RouteGroupKind) bool {
+	if listener.AllowedRoutes == nil || len(listener.AllowedRoutes.Kinds) == 0 {
+		// No specific kinds specified, so no invalid kinds
+		return true
+	}
+
+	// Check if any of the allowed route kinds are invalid/unsupported
+	for _, allowedKind := range listener.AllowedRoutes.Kinds {
+		isSupported := false
+		for _, supportedKind := range supportedKinds {
+			if allowedKind.Kind == supportedKind.Kind {
+				// Also check group if specified
+				if allowedKind.Group == nil || supportedKind.Group == nil ||
+					*allowedKind.Group == *supportedKind.Group {
+					isSupported = true
+					break
+				}
+			}
+		}
+		if !isSupported {
+			return false // Found an unsupported kind
+		}
+	}
+	return true // All kinds are supported
+}
+
 // TODO: refactor this struct + methods to better reflect the usage now in proxy_syncer
 
 func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attachedRoutes map[string]uint) *gwv1.GatewayStatus {
@@ -27,18 +114,48 @@ func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attached
 	if gwReport == nil {
 		return nil
 	}
+	fmt.Printf("DEBUG: Gateway %s generation=%d, gwReport.observedGeneration=%d\n",
+		gw.Name, gw.Generation, gwReport.observedGeneration)
 
 	finalListeners := make([]gwv1.ListenerStatus, 0, len(gw.Spec.Listeners))
 	for _, lis := range gw.Spec.Listeners {
 		lisReport := gwReport.listener(string(lis.Name))
-		addMissingListenerConditions(lisReport)
-		// Get attached routes for this listener
-		if attachedRoutes != nil {
-			if count, exists := attachedRoutes[string(lis.Name)]; exists {
-				lisReport.Status.AttachedRoutes = int32(count)
-			}
+		supportedKinds := getSupportedKindsForListener(lis)
+		fmt.Printf("DEBUG: getSupportedKindsForListener returned %d kinds\n", len(supportedKinds))
+		for i, kind := range supportedKinds {
+			fmt.Printf("DEBUG: supportedKind[%d] = %s\n", i, kind.Kind)
+		}
+		// Check for invalid route kinds
+		if len(supportedKinds) == 0 && lis.AllowedRoutes != nil && len(lis.AllowedRoutes.Kinds) > 0 {
+			// Listener specifies route kinds but none are supported
+			lisReport.SetCondition(pluginsdkreporter.ListenerCondition{
+				Type:    gwv1.ListenerConditionResolvedRefs,
+				Status:  metav1.ConditionFalse,
+				Reason:  gwv1.ListenerReasonInvalidRouteKinds,
+				Message: "Listener does not support any of the specified route kinds",
+			})
 		}
 
+		addMissingListenerConditions(lisReport)
+
+		// Add this debug in BuildGWStatus before the loop
+		fmt.Printf("DEBUG: attachedRoutes map for gateway %s: %+v\\n", gw.Name, attachedRoutes)
+
+		// And inside the loop:
+		if attachedRoutes != nil {
+			if count, exists := attachedRoutes[string(lis.Name)]; exists {
+				fmt.Printf("DEBUG: Setting AttachedRoutes for listener %s to %d\\n", lis.Name, count)
+				lisReport.Status.AttachedRoutes = int32(count)
+			} else {
+				fmt.Printf("DEBUG: No AttachedRoutes count found for listener %s\\n", lis.Name)
+			}
+		}
+		// Set supportedKinds to the intersection (could be empty!)
+		fmt.Printf("DEBUG: Setting supportedKinds (FIRST TIME) to %d kinds\n", len(supportedKinds))
+		if supportedKinds == nil {
+			supportedKinds = []gwv1.RouteGroupKind{}
+		}
+		lisReport.Status.SupportedKinds = supportedKinds
 		finalConditions := make([]metav1.Condition, 0, len(lisReport.Status.Conditions))
 		oldLisStatusIndex := slices.IndexFunc(gw.Status.Listeners, func(l gwv1.ListenerStatus) bool {
 			return l.Name == lis.Name
@@ -55,7 +172,10 @@ func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attached
 			meta.SetStatusCondition(&finalConditions, lisCondition)
 		}
 		lisReport.Status.Conditions = finalConditions
+		fmt.Printf("DEBUG: Final lisReport.Status.SupportedKinds has %d kinds\n", len(lisReport.Status.SupportedKinds))
 		finalListeners = append(finalListeners, lisReport.Status)
+		fmt.Printf("DEBUG: After append, finalListeners[%d].SupportedKinds has %d kinds\n",
+			len(finalListeners)-1, len(finalListeners[len(finalListeners)-1].SupportedKinds))
 	}
 
 	addMissingGatewayConditions(r.Gateway(&gw))
@@ -85,6 +205,7 @@ func (r *ReportMap) BuildGWStatus(ctx context.Context, gw gwv1.Gateway, attached
 	return &finalGwStatus
 }
 
+// Rest of the file remains the same...
 func (r *ReportMap) BuildListenerSetStatus(ctx context.Context, ls gwxv1a1.XListenerSet) *gwxv1a1.ListenerSetStatus {
 	lsReport := r.ListenerSet(&ls)
 	if lsReport == nil {
@@ -218,10 +339,35 @@ func (r *ReportMap) BuildRouteStatus(
 		slog.Error("unsupported route type for status reporting", "route_type", fmt.Sprintf("%T", obj))
 		return nil
 	}
+	slog.Info("DEBUG: BuildRouteStatus processing",
+		"route", obj.GetName(),
+		"namespace", obj.GetNamespace(),
+		"parentRefsCount", len(parentRefs))
 
+	for i, parentRef := range parentRefs {
+		ns := ""
+		if parentRef.Namespace != nil {
+			ns = string(*parentRef.Namespace)
+		}
+		slog.Info("DEBUG: Processing parentRef",
+			"index", i,
+			"parentName", string(parentRef.Name),
+			"parentNamespace", ns)
+
+		parentStatusReport := routeReport.getParentRefOrNil(&parentRef)
+		if parentStatusReport == nil {
+			slog.Info("DEBUG: No parentStatusReport found for parentRef", "index", i)
+		} else {
+			slog.Info("DEBUG: Found parentStatusReport", "conditionCount", len(parentStatusReport.Conditions))
+		}
+	}
 	newStatus := gwv1.RouteStatus{}
 	// Process the parent references to build the RouteParentStatus
 	for _, parentRef := range parentRefs {
+		if parentRef.Namespace == nil {
+			routeNs := gwv1.Namespace(obj.GetNamespace())
+			parentRef.Namespace = &routeNs
+		}
 		parentStatusReport := routeReport.getParentRefOrNil(&parentRef)
 		if parentStatusReport == nil {
 			// report doesn't have an entry for this parentRef, meaning we didn't translate it

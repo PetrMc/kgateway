@@ -11,6 +11,7 @@ import (
 	"istio.io/istio/pkg/kube"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -131,6 +132,10 @@ func (s *AgentGwStatusSyncer) Start(ctx context.Context) error {
 }
 
 func (s *AgentGwStatusSyncer) syncRouteStatus(ctx context.Context, logger *slog.Logger, routeReports RouteReports) {
+	logger.Info("DEBUG: agentgateway syncRouteStatus starting", "httpRoutes", len(routeReports.HTTPRoutes))
+	for rnn := range routeReports.HTTPRoutes {
+		logger.Info("DEBUG: agentgateway found HTTPRoute", "route", rnn.String())
+	}
 	stopwatch := utils.NewTranslatorStopWatch("RouteStatusSyncer")
 	stopwatch.Start()
 	defer stopwatch.Stop(ctx)
@@ -152,6 +157,7 @@ func (s *AgentGwStatusSyncer) syncRouteStatus(ctx context.Context, logger *slog.
 					if apierrors.IsNotFound(err) {
 						// the route is not found, we can't report status on it
 						// if it's recreated, we'll retranslate it anyway
+						logger.Debug("route not found, skipping status update", logKeyResourceRef, routeKey, logKeyRouteType, routeType)
 						return nil
 					}
 					logger.Error("error getting route", logKeyError, err, logKeyResourceRef, routeKey, logKeyRouteType, routeType)
@@ -181,29 +187,78 @@ func (s *AgentGwStatusSyncer) syncRouteStatus(ctx context.Context, logger *slog.
 	buildAndUpdateStatus := func(route client.Object, routeType string) error {
 		var status *gwv1.RouteStatus
 		switch r := route.(type) {
-		case *gwv1.HTTPRoute: // TODO: beta1?
+		case *gwv1.HTTPRoute:
+			logger.Info("DEBUG: Building status for HTTPRoute", "name", r.Name, "namespace", r.Namespace)
+			routeKey := types.NamespacedName{Namespace: r.Namespace, Name: r.Name}
+			logger.Info("DEBUG: Checking routeReports.HTTPRoutes", "totalRoutes", len(routeReports.HTTPRoutes))
+
+			if routeReport, exists := routeReports.HTTPRoutes[routeKey]; exists {
+				logger.Info("DEBUG: Found route report in HTTPRoutes", "parentCount", len(routeReport.Parents))
+				for parentKey, parentReport := range routeReport.Parents {
+					logger.Info("DEBUG: Route report parent", "parentKey", parentKey, "conditionCount", len(parentReport.Conditions))
+				}
+			} else {
+				logger.Info("DEBUG: Route report NOT found in HTTPRoutes map")
+				// Log all routes that ARE in the map
+				for key := range routeReports.HTTPRoutes {
+					logger.Info("DEBUG: Available route in map", "route", key.String())
+				}
+			}
+
 			status = rm.BuildRouteStatus(ctx, r, s.controllerName)
-			if status == nil || isRouteStatusEqual(&r.Status.RouteStatus, status) {
+			if status == nil {
+				logger.Info("DEBUG: BuildRouteStatus returned nil", "route", r.Name)
 				return nil
 			}
+			logger.Info("DEBUG: Status comparison details",
+				"route", r.Name,
+				"currentParents", len(r.Status.RouteStatus.Parents),
+				"newParents", len(status.Parents))
+
+			if isRouteStatusEqual(&r.Status.RouteStatus, status) {
+				logger.Info("DEBUG: Status unchanged, skipping update", "route", r.Name)
+				return nil
+			}
+			logger.Info("DEBUG: Status changed, updating", "route", r.Name, "newParents", len(status.Parents))
 			r.Status.RouteStatus = *status
 		case *gwv1alpha2.TCPRoute:
+			logger.Info("DEBUG: Building status for TCPRoute", "name", route.GetName(), "namespace", route.GetNamespace())
 			status = rm.BuildRouteStatus(ctx, r, s.controllerName)
-			if status == nil || isRouteStatusEqual(&r.Status.RouteStatus, status) {
+			if status == nil {
+				logger.Info("DEBUG: BuildRouteStatus returned nil", "route", route.GetName())
 				return nil
 			}
+			if isRouteStatusEqual(&r.Status.RouteStatus, status) {
+				logger.Info("DEBUG: Status unchanged, skipping update", "route", route.GetName())
+				return nil
+			}
+			logger.Info("DEBUG: Status changed, updating", "route", route.GetName(), "newParents", len(status.Parents))
 			r.Status.RouteStatus = *status
 		case *gwv1alpha2.TLSRoute:
+			logger.Info("DEBUG: Building status for TLSRoute", "name", route.GetName(), "namespace", route.GetNamespace())
 			status = rm.BuildRouteStatus(ctx, r, s.controllerName)
-			if status == nil || isRouteStatusEqual(&r.Status.RouteStatus, status) {
+			if status == nil {
+				logger.Info("DEBUG: BuildRouteStatus returned nil", "route", route.GetName())
 				return nil
 			}
+			if isRouteStatusEqual(&r.Status.RouteStatus, status) {
+				logger.Info("DEBUG: Status unchanged, skipping update", "route", route.GetName())
+				return nil
+			}
+			logger.Info("DEBUG: Status changed, updating", "route", route.GetName(), "newParents", len(status.Parents))
 			r.Status.RouteStatus = *status
 		case *gwv1.GRPCRoute:
+			logger.Info("DEBUG: Building status for GRPCRoute", "name", route.GetName(), "namespace", route.GetNamespace())
 			status = rm.BuildRouteStatus(ctx, r, s.controllerName)
-			if status == nil || isRouteStatusEqual(&r.Status.RouteStatus, status) {
+			if status == nil {
+				logger.Info("DEBUG: BuildRouteStatus returned nil", "route", route.GetName())
 				return nil
 			}
+			if isRouteStatusEqual(&r.Status.RouteStatus, status) {
+				logger.Info("DEBUG: Status unchanged, skipping update", "route", route.GetName())
+				return nil
+			}
+			logger.Info("DEBUG: Status changed, updating", "route", route.GetName(), "newParents", len(status.Parents))
 			r.Status.RouteStatus = *status
 		default:
 			logger.Warn("unsupported route type", logKeyRouteType, routeType, logKeyResourceRef, client.ObjectKeyFromObject(route))
@@ -211,16 +266,22 @@ func (s *AgentGwStatusSyncer) syncRouteStatus(ctx context.Context, logger *slog.
 		}
 
 		// Update the status
-		return s.mgr.GetClient().Status().Update(ctx, route)
+		logger.Info("DEBUG: About to call Status().Update", "route", route.GetName())
+		err := s.mgr.GetClient().Status().Update(ctx, route)
+		if err != nil {
+			logger.Error("DEBUG: Status update FAILED", "route", route.GetName(), "error", err)
+			return err
+		}
+		logger.Info("DEBUG: Status update SUCCESS", "route", route.GetName())
+		return nil
 	}
 
+	// Process HTTPRoutes
 	for rnn := range routeReports.HTTPRoutes {
 		err := syncStatusWithRetry(
 			wellknown.HTTPRouteKind,
 			rnn,
-			func() client.Object {
-				return new(gwv1.HTTPRoute)
-			},
+			func() client.Object { return new(gwv1.HTTPRoute) },
 			func(route client.Object) error {
 				return buildAndUpdateStatus(route, wellknown.HTTPRouteKind)
 			},
@@ -229,37 +290,90 @@ func (s *AgentGwStatusSyncer) syncRouteStatus(ctx context.Context, logger *slog.
 			logger.Error("all attempts failed at updating HTTPRoute status", logKeyError, err, "route", rnn)
 		}
 	}
+
+	// Process GRPCRoutes
+	for rnn := range routeReports.GRPCRoutes {
+		err := syncStatusWithRetry(
+			wellknown.GRPCRouteKind,
+			rnn,
+			func() client.Object { return new(gwv1.GRPCRoute) },
+			func(route client.Object) error {
+				return buildAndUpdateStatus(route, wellknown.GRPCRouteKind)
+			},
+		)
+		if err != nil {
+			logger.Error("all attempts failed at updating GRPCRoute status", logKeyError, err, "route", rnn)
+		}
+	}
+
+	// Process TCPRoutes
+	for rnn := range routeReports.TCPRoutes {
+		err := syncStatusWithRetry(
+			wellknown.TCPRouteKind,
+			rnn,
+			func() client.Object { return new(gwv1alpha2.TCPRoute) },
+			func(route client.Object) error {
+				return buildAndUpdateStatus(route, wellknown.TCPRouteKind)
+			},
+		)
+		if err != nil {
+			logger.Error("all attempts failed at updating TCPRoute status", logKeyError, err, "route", rnn)
+		}
+	}
+
+	// Process TLSRoutes
+	for rnn := range routeReports.TLSRoutes {
+		err := syncStatusWithRetry(
+			wellknown.TLSRouteKind,
+			rnn,
+			func() client.Object { return new(gwv1alpha2.TLSRoute) },
+			func(route client.Object) error {
+				return buildAndUpdateStatus(route, wellknown.TLSRouteKind)
+			},
+		)
+		if err != nil {
+			logger.Error("all attempts failed at updating TLSRoute status", logKeyError, err, "route", rnn)
+		}
+	}
 }
 
 // syncGatewayStatus will build and update status for all Gateways in gateway reports
 func (s *AgentGwStatusSyncer) syncGatewayStatus(ctx context.Context, logger *slog.Logger, gatewayReports GatewayReports) {
+	// Add this at the very beginning
+	fmt.Printf("=== DEBUG: syncGatewayStatus ENTRY ===\n")
+	fmt.Printf("DEBUG: gatewayReports.Reports count: %d\n", len(gatewayReports.Reports))
+
 	stopwatch := utils.NewTranslatorStopWatch("GatewayStatusSyncer")
 	stopwatch.Start()
-
-	// TODO: add gatewayStatusMetrics
 
 	// Create a minimal ReportMap with just the gateway reports for BuildGWStatus to work
 	rm := reports.ReportMap{
 		Gateways: gatewayReports.Reports,
 	}
 
-	// TODO: retry within loop per GW rather that as a full block
 	err := retry.Do(func() error {
+		fmt.Printf("DEBUG: Starting retry attempt\n")
 		for gwnn := range gatewayReports.Reports {
+			fmt.Printf("DEBUG: Processing gateway %s\n", gwnn.String())
+
 			gw := gwv1.Gateway{}
 			err := s.mgr.GetClient().Get(ctx, gwnn, &gw)
 			if err != nil {
 				if apierrors.IsNotFound(err) {
-					// the gateway is not found, we can't report status on it
-					// if it's recreated, we'll retranslate it anyway
+					fmt.Printf("DEBUG: Gateway %s not found, skipping\n", gwnn.String())
 					continue
 				}
+				fmt.Printf("DEBUG: Error getting gateway %s: %v\n", gwnn.String(), err)
 				logger.Info("error getting gw", logKeyError, err, logKeyGateway, gwnn.String())
 				return err
 			}
 
+			fmt.Printf("DEBUG: Got gateway %s, class=%s, expected=%s\n",
+				gwnn.String(), string(gw.Spec.GatewayClassName), s.agentGatewayClassName)
+
 			// Only process agentgateway classes - others are handled by ProxySyncer
 			if string(gw.Spec.GatewayClassName) != s.agentGatewayClassName {
+				fmt.Printf("DEBUG: Skipping non-agentgateway %s\n", gwnn.String())
 				logger.Debug("skipping status sync for non-agentgateway", logKeyGateway, gwnn.String())
 				continue
 			}
@@ -271,26 +385,35 @@ func (s *AgentGwStatusSyncer) syncGatewayStatus(ctx context.Context, logger *slo
 				attachedRoutesForGw = gatewayReports.AttachedRoutes[gwnn]
 			}
 
+			fmt.Printf("DEBUG: About to call BuildGWStatus for %s\n", gwnn.String())
+
 			if status := rm.BuildGWStatus(ctx, gw, attachedRoutesForGw); status != nil {
+				setObservedGen(&gw, status)
+
+				fmt.Printf("DEBUG: BuildGWStatus returned status for %s, comparing...\n", gwnn.String())
+
 				if !isGatewayStatusEqual(&gwStatusWithoutAddress, status) {
+					fmt.Printf("DEBUG: Status changed, updating gateway %s\n", gwnn.String())
 					gw.Status = *status
 					if err := s.mgr.GetClient().Status().Patch(ctx, &gw, client.Merge); err != nil {
+						fmt.Printf("DEBUG: Error patching gateway %s: %v\n", gwnn.String(), err)
 						logger.Error("error patching gateway status", logKeyError, err, logKeyGateway, gwnn.String())
 						return err
 					}
 					logger.Info("patched gw status", logKeyGateway, gwnn.String())
 				} else {
+					fmt.Printf("DEBUG: Status unchanged for gateway %s\n", gwnn.String())
 					logger.Info("skipping k8s gateway status update, status equal", logKeyGateway, gwnn.String())
 				}
+			} else {
+				fmt.Printf("DEBUG: BuildGWStatus returned nil for %s (no status patch)\n", gwnn.String())
 			}
 		}
 		return nil
-	},
-		retry.Attempts(maxRetryAttempts),
-		retry.Delay(retryDelay),
-		retry.DelayType(retry.BackOffDelay),
-	)
+	} /* retry config */)
+
 	if err != nil {
+		fmt.Printf("DEBUG: Retry failed with error: %v\n", err)
 		logger.Error("all attempts failed at updating gateway statuses", logKeyError, err)
 	}
 	duration := stopwatch.Stop(ctx)
@@ -373,4 +496,19 @@ func isListenerSetStatusEqual(objA, objB *gwxv1a1.ListenerSetStatus) bool {
 
 func isGatewayStatusEqual(objA, objB *gwv1.GatewayStatus) bool {
 	return cmp.Equal(objA, objB, opts)
+}
+
+// setObservedGen stamps ObservedGeneration on all gateway + listener conditions.
+func setObservedGen(gw *gwv1.Gateway, st *gwv1.GatewayStatus) {
+	if st == nil {
+		return
+	}
+	for i := range st.Conditions {
+		st.Conditions[i].ObservedGeneration = gw.Generation
+	}
+	for li := range st.Listeners {
+		for ci := range st.Listeners[li].Conditions {
+			st.Listeners[li].Conditions[ci].ObservedGeneration = gw.Generation
+		}
+	}
 }

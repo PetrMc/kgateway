@@ -2,7 +2,6 @@ package agentgatewaysyncer
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -111,33 +110,60 @@ func convertHTTPRouteToADP(ctx RouteContext, r gwv1.HTTPRouteRule,
 	if err != nil {
 		return nil, err
 	}
+	// Backends + hostnames (leave empty slice to mean “match all” in KGateway; no "*")
 	res.Backends = route
-	res.Hostnames = slices.Map(obj.Spec.Hostnames, func(e gwv1.Hostname) string {
-		return string(e)
-	})
+	res.Hostnames = slices.Map(obj.Spec.Hostnames, func(h gwv1.Hostname) string { return string(h) })
 
-	// Return filter error if present, otherwise return backend error
-	var errs []error
-	var errorReason gwv1.RouteConditionReason = gwv1.RouteReasonBackendNotFound
+	// If the backendRef Kind is invalid, inject an AgentGateway DirectResponse(500).
+	if backendErr != nil && backendErr.Reason == gwv1.RouteReasonInvalidKind {
+		// Build once
+		drf := &api.RouteFilter{
+			Kind: &api.RouteFilter_DirectResponse{
+				DirectResponse: &api.DirectResponse{
+					Status: 500,
+					Body:   []byte("invalid backend kind"),
+				},
+			},
+		}
+
+		// Avoid double-injecting; if not present, put it at the *front*.
+		hasDR := false
+		for _, f := range res.Filters {
+			if _, ok := f.GetKind().(*api.RouteFilter_DirectResponse); ok {
+				hasDR = true
+				break
+			}
+		}
+		if !hasDR {
+			// prepend so it runs first
+			res.Filters = append([]*api.RouteFilter{drf}, res.Filters...)
+			fmt.Printf("DEBUG-HTTPROUTE: %s/%s injected DirectResponse(500) at index 0 due to InvalidKind\n",
+				obj.Namespace, obj.Name)
+		}
+	}
+
+	// ===== DEBUG: what did we build? =====
+	fmt.Printf("DEBUG-HTTPROUTE: name=%s ns=%s hostnames=%v matches=%d filters=%d backends=%d\n",
+		obj.Name, obj.Namespace, obj.Spec.Hostnames, len(res.GetMatches()), len(res.GetFilters()), len(res.GetBackends()))
+	for i, f := range res.GetFilters() {
+		switch f.GetKind().(type) {
+		case *api.RouteFilter_DirectResponse:
+			fmt.Printf("DEBUG-HTTPROUTE: %s/%s filter[%d]=DirectResponse\n", obj.Namespace, obj.Name, i)
+		default:
+			// just mark non-DR
+			fmt.Printf("DEBUG-HTTPROUTE: %s/%s filter[%d]=other\n", obj.Namespace, obj.Name, i)
+		}
+	}
 	if filterError != nil {
-		errs = append(errs, fmt.Errorf("%s", filterError.Message))
-		errorReason = filterError.Reason
+		fmt.Printf("DEBUG-HTTPROUTE: %s/%s filterError=%q\n", obj.Namespace, obj.Name, filterError.Message)
 	}
 	if backendErr != nil {
-		errs = append(errs, fmt.Errorf("backend error: %s", backendErr.Message))
-		if filterError == nil {
-			errorReason = backendErr.Reason
-		}
+		fmt.Printf("DEBUG-HTTPROUTE: %s/%s backendErr reason=%s msg=%q\n",
+			obj.Namespace, obj.Name, backendErr.Reason, backendErr.Message)
 	}
-	if len(errs) > 0 {
-		return res, &reporter.RouteCondition{
-			Type:    gwv1.RouteConditionAccepted,
-			Status:  metav1.ConditionFalse,
-			Reason:  errorReason,
-			Message: errors.Join(errs...).Error(),
-		}
-	}
+
 	return res, backendErr
+
 }
 
 func convertTCPRouteToADP(ctx RouteContext, r gwv1alpha2.TCPRouteRule,
@@ -722,18 +748,18 @@ func referenceAllowed(
 		if len(hostnames) == 0 {
 			hostnames = []gwv1.Hostname{"*"}
 		}
+		if len(hostnames) == 0 {
+			hostnames = []gwv1.Hostname{"*"}
+		}
 		if len(parent.Hostnames) > 0 {
-			// TODO: the spec actually has a label match, not a string match. That is, *.com does not match *.apple.com
-			// We are doing a string match here
+			fmt.Printf("DEBUG PARENT: parent.Hostnames = %+v\n", parent.Hostnames)
+			fmt.Printf("DEBUG ROUTE: route hostnames = %+v\n", hostnames)
 			matched := false
 			hostMatched := false
 		out:
 			for _, routeHostname := range hostnames {
 				for _, parentHostNamespace := range parent.Hostnames {
 					var parentNamespace, parentHostname string
-					// When parentHostNamespace lacks a '/', it was likely sanitized from '*/host' to 'host'
-					// by sanitizeServerHostNamespace. Set parentNamespace to '*' to reflect the wildcard namespace
-					// and parentHostname to the sanitized host to prevent an index out of range panic.
 					if strings.Contains(parentHostNamespace, "/") {
 						spl := strings.Split(parentHostNamespace, "/")
 						parentNamespace, parentHostname = spl[0], spl[1]
@@ -742,10 +768,17 @@ func referenceAllowed(
 					}
 
 					hostnameMatch := host.Name(parentHostname).Matches(host.Name(routeHostname))
+					fmt.Printf("DEBUG MATCH: hostname matching - parent: %s, route: %s, istio: %v\n",
+						parentHostname, routeHostname, hostnameMatch)
+
 					namespaceMatch := parentNamespace == "*" || parentNamespace == localNamespace
+					fmt.Printf("DEBUG NAMESPACE: parentNamespace='%s', localNamespace='%s', namespaceMatch=%v\n",
+						parentNamespace, localNamespace, namespaceMatch)
+
 					hostMatched = hostMatched || hostnameMatch
 					if hostnameMatch && namespaceMatch {
 						matched = true
+						fmt.Printf("DEBUG MATCH: matched: %v\n", matched)
 						break out
 					}
 				}
@@ -787,23 +820,95 @@ func referenceAllowed(
 	return nil
 }
 
+func gatewayAPIHostnameMatch(listenerHostname, routeHostname string) bool {
+	fmt.Printf("DEBUG MATCH: gatewayAPIHostnameMatch called - listener: %s, route: %s\n", listenerHostname, routeHostname)
+
+	// Try Istio's matching first
+	istioMatch := host.Name(listenerHostname).Matches(host.Name(routeHostname))
+	fmt.Printf("DEBUG MATCH: Istio match: %v\n", istioMatch)
+	if istioMatch {
+		return true
+	}
+
+	// Handle Gateway API wildcard cases Istio might miss
+	if strings.HasPrefix(routeHostname, "*.") && !strings.HasPrefix(listenerHostname, "*.") {
+		result := strings.HasSuffix(listenerHostname, routeHostname[1:])
+		fmt.Printf("DEBUG MATCH: Route wildcard case: %v\n", result)
+		return result
+	}
+
+	if strings.HasPrefix(listenerHostname, "*.") && !strings.HasPrefix(routeHostname, "*.") {
+		result := strings.HasSuffix(routeHostname, listenerHostname[1:])
+		fmt.Printf("DEBUG MATCH: Listener wildcard case: %v\n", result)
+		return result
+	}
+
+	// Both wildcards - should match if domains are identical
+	if strings.HasPrefix(routeHostname, "*.") && strings.HasPrefix(listenerHostname, "*.") {
+		result := routeHostname[1:] == listenerHostname[1:]
+		fmt.Printf("DEBUG MATCH: Both wildcards case: %v (%s == %s)\n", result, routeHostname[1:], listenerHostname[1:])
+		return result
+	}
+
+	fmt.Printf("DEBUG MATCH: No match\n")
+	return false
+}
+
 func extractParentReferenceInfo(ctx RouteContext, parents RouteParents, obj controllers.Object) []routeParentReference {
 	routeRefs, hostnames, kind := GetCommonRouteInfo(obj)
 	localNamespace := obj.GetNamespace()
+
+	statusParents := GetRouteStatusParentsV1(obj)
+
+	statusParentKey := func(ns, name string, section gwv1.SectionName) string {
+		return ns + "/" + name + "#" + string(section)
+	}
+
+	acceptedSet := make(map[string]struct{})
+	for _, ps := range statusParents {
+		ref := ps.ParentRef // v1: value, not pointer
+
+		// (optional) filter by controller name here if you have one; skipped by default
+		accepted := false
+		for _, c := range ps.Conditions {
+			if c.Type == string(gwv1.RouteConditionAccepted) && c.Status == metav1.ConditionTrue {
+				accepted = true
+				break
+			}
+		}
+		if !accepted {
+			continue
+		}
+
+		ns := localNamespace
+		if ref.Namespace != nil {
+			ns = string(*ref.Namespace)
+		}
+		// per-listener accounting requires SectionName in status
+		if ref.SectionName == nil {
+			continue
+		}
+		acceptedSet[statusParentKey(ns, string(ref.Name), *ref.SectionName)] = struct{}{}
+	}
+	// ---------------------------------------------------------------
+
 	var parentRefs []routeParentReference
 	for _, ref := range routeRefs {
 		ir, err := toInternalParentReference(ref, localNamespace)
 		if err != nil {
-			// Cannot handle the reference. Maybe it is for another controller, so we just ignore it
+			// Cannot handle the reference. Maybe it is for another controller, so ignore it.
 			continue
 		}
+
 		pk := parentReference{
 			parentKey:   ir,
 			SectionName: ptr.OrEmpty(ref.SectionName),
 			Port:        ptr.OrEmpty(ref.Port),
 		}
+
 		gk := ir
 		currentParents := parents.fetch(ctx.Krt, gk)
+
 		appendParent := func(pr *parentInfo, pk parentReference) {
 			bannedHostnames := sets.New[string]()
 			for _, gw := range currentParents {
@@ -811,16 +916,17 @@ func extractParentReferenceInfo(ctx RouteContext, parents RouteParents, obj cont
 					continue // do not ban ourself
 				}
 				if gw.Port != pr.Port {
-					// We only care about listeners on the same port
-					continue
+					continue // only listeners on the same port
 				}
 				if gw.Protocol != pr.Protocol {
-					// We only care about listeners on the same protocol
-					continue
+					continue // only listeners on the same protocol
 				}
 				bannedHostnames.Insert(gw.OriginalHostname)
 			}
+
 			deniedReason := referenceAllowed(ctx, pr, kind, pk, hostnames, localNamespace)
+			denied := referenceAllowed(ctx, pr, kind, pk, hostnames, localNamespace)
+
 			rpi := routeParentReference{
 				InternalName:      pr.InternalName,
 				InternalKind:      ir.Kind,
@@ -830,14 +936,17 @@ func extractParentReferenceInfo(ctx RouteContext, parents RouteParents, obj cont
 				BannedHostnames:   bannedHostnames.Copy().Delete(pr.OriginalHostname),
 				ParentKey:         ir,
 				ParentSection:     pr.SectionName,
+				Accepted:          denied == nil,
 			}
 			parentRefs = append(parentRefs, rpi)
 		}
+
 		for _, gw := range currentParents {
-			// Append all matches. Note we may be adding mismatch section or ports; this is handled later
+			// Append all matches. Mismatched section/ports are handled later.
 			appendParent(gw, pk)
 		}
 	}
+
 	// Ensure stable order
 	slices.SortBy(parentRefs, func(a routeParentReference) string {
 		return parentRefString(a.OriginalReference)
@@ -910,6 +1019,8 @@ type routeParentReference struct {
 	BannedHostnames sets.Set[string]
 	ParentKey       parentKey
 	ParentSection   gwv1.SectionName
+
+	Accepted bool
 }
 
 func filteredReferences(parents []routeParentReference) []routeParentReference {
@@ -1410,4 +1521,75 @@ func getRouteKeyPosition(obj metav1.ObjectMeta, pos int) string {
 
 func getRouteKeySectionName(obj metav1.ObjectMeta, sectionName string) string {
 	return obj.GetNamespace() + "/" + obj.GetName() + "/" + sectionName
+}
+
+func statusParentKey(ns, name string, section gwv1.SectionName) string {
+	return ns + "/" + name + "#" + string(section)
+}
+
+// Build set of (ns,name,section) that are Accepted=True in route.Status.Parents
+// controller == "" to skip controller filtering.
+func acceptedSetFromStatus(
+	statusParents []gwv1.RouteParentStatus,
+	routeNS string,
+	controller gwv1.GatewayController,
+) map[string]struct{} {
+	out := make(map[string]struct{})
+
+	for _, ps := range statusParents {
+		// v1: ParentRef is a VALUE, not a pointer. No nil-check.
+		ref := ps.ParentRef
+
+		// optional: filter by controller
+		if controller != "" && ps.ControllerName != controller {
+			continue
+		}
+
+		// look for Accepted=True
+		accepted := false
+		for _, c := range ps.Conditions {
+			if c.Type == string(gwv1.RouteConditionAccepted) && c.Status == metav1.ConditionTrue {
+				accepted = true
+				break
+			}
+		}
+		if !accepted {
+			continue
+		}
+
+		// resolve namespace
+		ns := routeNS
+		if ref.Namespace != nil {
+			ns = string(*ref.Namespace)
+		}
+
+		// per-listener accounting requires SectionName in status
+		if ref.SectionName == nil {
+			continue
+		}
+
+		out[statusParentKey(ns, string(ref.Name), *ref.SectionName)] = struct{}{}
+	}
+	return out
+}
+
+func GetRouteStatusParentsV1(obj any) []gwv1.RouteParentStatus {
+	switch r := obj.(type) {
+	case *gwv1.HTTPRoute:
+		return r.Status.Parents
+	case *gwv1.GRPCRoute:
+		return r.Status.Parents
+	default:
+		return nil // TCP/TLS are not in gwv1; ignore here
+	}
+}
+
+// internal key for a (routeNS, gateway, section) tuple
+func makeInternalName(routeNS string, parent routeParentReference) string {
+	return fmt.Sprintf("%s/%s/%s/%s",
+		routeNS,                      // ROUTE namespace (critical!)
+		parent.ParentKey.Namespace,   // gateway namespace
+		parent.ParentKey.Name,        // gateway name
+		string(parent.ParentSection), // listener section name
+	)
 }

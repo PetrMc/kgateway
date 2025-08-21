@@ -1,6 +1,7 @@
 package agentgatewaysyncer
 
 import (
+	"fmt"
 	"iter"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/util/protomarshal"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	inf "sigs.k8s.io/gateway-api-inference-extension/api/v1alpha2"
@@ -114,26 +116,60 @@ func ADPRouteCollection(
 	return routes
 }
 
-// buildAttachedRoutesMap builds a map of gateway -> section name -> route count
-func buildAttachedRoutesMap(parentRefs []routeParentReference) map[types.NamespacedName]map[string]uint {
-	attachedRoutes := make(map[types.NamespacedName]map[string]uint)
-	for _, parent := range filteredReferences(parentRefs) {
+// buildAttachedRoutesMap builds a map of gateway -> section name -> route count,
+func buildAttachedRoutesMap(
+	parentRefs []routeParentReference,
+	routeNN types.NamespacedName,
+) map[types.NamespacedName]map[string]uint {
+
+	attached := make(map[types.NamespacedName]map[string]uint)
+
+	// robust dedupe key
+	type attachKey struct {
+		gw       types.NamespacedName
+		listener string
+		route    types.NamespacedName
+	}
+	seen := make(map[attachKey]struct{})
+
+	// NOTE: This helper counts every (gw, listener) in parentRefs.
+	// Prefer buildAttachedRoutesMapAllowed() for "only-allowed" counting.
+	for i, parent := range parentRefs {
 		if parent.ParentKey.Kind != wellknown.GatewayGVK {
 			continue
 		}
-		parentGw := types.NamespacedName{
-			Namespace: parent.ParentKey.Namespace,
-			Name:      parent.ParentKey.Name,
+		gw := types.NamespacedName{Namespace: parent.ParentKey.Namespace, Name: parent.ParentKey.Name}
+		lis := string(parent.ParentSection)
+
+		// high-signal debug
+		fmt.Printf("ATTACH-COUNT: route=%s gw=%s listener=%q (idx=%d)\n",
+			routeNN.String(), gw.String(), lis, i)
+
+		k := attachKey{gw: gw, listener: lis, route: routeNN}
+		if _, ok := seen[k]; ok {
+			// duplicate for same (gw,listener,route) => ignore
+			continue
 		}
-		if attachedRoutes[parentGw] == nil {
-			attachedRoutes[parentGw] = make(map[string]uint)
+		seen[k] = struct{}{}
+
+		if attached[gw] == nil {
+			attached[gw] = make(map[string]uint)
 		}
-		attachedRoutes[parentGw][string(parent.ParentSection)]++
+		attached[gw][lis]++
 	}
-	return attachedRoutes
+
+	// summary debug
+	fmt.Printf("ATTACH-COUNT-SUMMARY: route=%s -> %d gateways\n", routeNN.String(), len(attached))
+	for gw, m := range attached {
+		for lis, c := range m {
+			fmt.Printf("  gw=%s listener=%q count+=%d\n", gw.String(), lis, c)
+		}
+	}
+	return attached
 }
 
 // processParentReferences processes filtered parent references and builds resources per gateway
+// DEBUG logging added to print gw, listener, route, and decisions.
 func processParentReferences[T any](
 	parentRefs []routeParentReference,
 	gwResult conversionResult[T],
@@ -143,32 +179,195 @@ func processParentReferences[T any](
 ) map[types.NamespacedName][]*api.Resource {
 	resourcesPerGateway := make(map[types.NamespacedName][]*api.Resource)
 
-	for _, parent := range filteredReferences(parentRefs) {
-		// Always create a route reporter entry for the parent ref
-		parentRefReporter := routeReporter.ParentRef(&parent.OriginalReference)
+	fmt.Printf("DEBUG: processParentReferences: route=%s parents=%d\n", objName, len(parentRefs))
 
-		// for gwv1beta1 routes, build one VS per gwv1beta1+host
-		routes := gwResult.routes
-		if len(routes) == 0 {
-			logger.Debug("no routes for parent", "route_name", objName, "parent", parent.ParentKey)
+	// Build the "allowed" set from filteredReferences so we can attach only permitted ones,
+	// but aggregate status per-Gateway across listeners.
+	allowed := make(map[string]struct{})
+	for _, p := range filteredReferences(parentRefs) {
+		if p.ParentKey.Kind != wellknown.GatewayGVK {
 			continue
 		}
-		if gwResult.error != nil {
-			parentRefReporter.SetCondition(*gwResult.error)
+		k := fmt.Sprintf("%s/%s/%s/%s", p.ParentKey.Namespace, p.ParentKey.Name, p.ParentKey.Kind, string(p.ParentSection))
+		allowed[k] = struct{}{}
+	}
+	// Aggregate per Gateway so we emit exactly ONE ParentStatus per Gateway.
+	type gwAgg struct {
+		anyAllowed bool
+		rep        routeParentReference // representative to build ParentRef (sans SectionName)
+	}
+	agg := make(map[types.NamespacedName]*gwAgg)
+	// Seed aggregator from ALL raw parent refs (so gateways with no allowed listeners still get a status)
+	for _, p := range parentRefs {
+		if p.ParentKey.Kind != wellknown.GatewayGVK {
+			continue
+		}
+		gwNN := types.NamespacedName{Namespace: p.ParentKey.Namespace, Name: p.ParentKey.Name}
+		if _, ok := agg[gwNN]; !ok {
+			agg[gwNN] = &gwAgg{anyAllowed: false, rep: p}
+		}
+	}
+
+	// Route-wide ref resolution: if conversion failed, ResolvedRefs should be False for all parents.
+	resolvedOK := (gwResult.error == nil)
+
+	idx := 0
+	for _, parent := range parentRefs { // iterate ALL raw refs (not just filtered)
+		idx++
+
+		if parent.ParentKey.Kind != wellknown.GatewayGVK {
+			fmt.Printf("DEBUG: [%d] SKIP non-Gateway kind=%q route=%s parent=%s/%s listener=%q\n",
+				idx, parent.ParentKey.Kind, objName, parent.ParentKey.Namespace, parent.ParentKey.Name, string(parent.ParentSection))
+			continue
 		}
 
-		gw := types.NamespacedName{
-			Namespace: parent.ParentKey.Namespace,
-			Name:      parent.ParentKey.Name,
+		gwNN := types.NamespacedName{Namespace: parent.ParentKey.Namespace, Name: parent.ParentKey.Name}
+		listener := string(parent.ParentSection)
+		keyStr := fmt.Sprintf("%s/%s/%s/%s", parent.ParentKey.Namespace, parent.ParentKey.Name, parent.ParentKey.Kind, listener)
+		_, isAllowed := allowed[keyStr]
+
+		fmt.Printf("DEBUG: [%d] CONSIDER route=%s gw=%s listener=%q allowed=%v\n", idx, objName, gwNN.String(), listener, isAllowed)
+		// Aggregate acceptance regardless of ref resolution so that:
+		// - Accepted=True if any listener hostname matches (even if backend refs are invalid)
+		// - ResolvedRefs will be False when conversion failed
+		if isAllowed {
+			if a := agg[gwNN]; a != nil {
+				a.anyAllowed = true
+			}
 		}
-		if resourcesPerGateway[gw] == nil {
-			resourcesPerGateway[gw] = make([]*api.Resource, 0)
+		// If not allowed by hostname/section, nothing to map for this listener.
+		if !isAllowed {
+			continue
 		}
-		resourcesPerGateway[gw] = append(resourcesPerGateway[gw], slices.Map(routes, func(e T) *api.Resource {
-			return resourceMapper(e, parent)
-		})...)
+		// Allowed path: map resources (may be zero) and set positive conditions.
+		var mapped []*api.Resource
+		{
+			routes := gwResult.routes
+			mapped = make([]*api.Resource, 0, len(routes))
+			for i := range routes {
+				if r := resourceMapper(routes[i], parent); r != nil {
+					mapped = append(mapped, r)
+				}
+			}
+		}
+
+		fmt.Printf("DEBUG: STORING route report for %s with parent %s\n", objName, gwNN.String())
+		fmt.Printf("DEBUG: [%d] ACCEPT route=%s gw=%s listener=%q resources=%d\n",
+			idx, objName, gwNN.String(), listener, len(mapped))
+
+		if resourcesPerGateway[gwNN] == nil {
+			resourcesPerGateway[gwNN] = make([]*api.Resource, 0, len(mapped))
+		}
+		resourcesPerGateway[gwNN] = append(resourcesPerGateway[gwNN], mapped...)
+	}
+
+	// Emit exactly ONE ParentStatus per Gateway (aggregate across listeners).
+	for gwNN, a := range agg {
+		// Build a fully-qualified ParentRef for status WITHOUT SectionName (per-Gateway status).
+		parent := a.rep
+		prStatusRef := parent.OriginalReference
+		{
+			g := gwv1.Group(wellknown.GatewayGVK.Group)
+			k := gwv1.Kind(wellknown.GatewayGVK.Kind)
+			ns := gwv1.Namespace(parent.ParentKey.Namespace)
+			prStatusRef.Group = &g
+			prStatusRef.Kind = &k
+			prStatusRef.Namespace = &ns
+			prStatusRef.Name = gwv1.ObjectName(parent.ParentKey.Name)
+			prStatusRef.SectionName = nil // aggregate by Gateway, not listener
+		}
+		pr := routeReporter.ParentRef(&prStatusRef)
+		reason := reasonResolvedRefs(gwResult.error, resolvedOK)
+		if a.anyAllowed {
+			pr.SetCondition(reporter.RouteCondition{
+				Type:   gwv1.RouteConditionAccepted,
+				Status: metav1.ConditionTrue,
+				Reason: gwv1.RouteReasonAccepted,
+			})
+		} else {
+			pr.SetCondition(reporter.RouteCondition{
+				Type:    gwv1.RouteConditionAccepted,
+				Status:  metav1.ConditionFalse,
+				Reason:  gwv1.RouteConditionReason("NoMatchingListenerHostname"),
+				Message: "No route hostnames intersect any listener hostname",
+			})
+		}
+		// ResolvedRefs reflects backend/filter resolution, not hostname attachment.
+		pr.SetCondition(reporter.RouteCondition{
+			Type: gwv1.RouteConditionResolvedRefs,
+			Status: func() metav1.ConditionStatus {
+				if resolvedOK {
+					return metav1.ConditionTrue
+				}
+				return metav1.ConditionFalse
+			}(),
+			Reason: reason,
+		})
+		fmt.Printf("DEBUG: EMIT ParentStatus gw=%s Accepted=%v ResolvedRefs=%v\n", gwNN.String(), a.anyAllowed, resolvedOK)
+	}
+
+	fmt.Printf("DEBUG: processParentReferences DONE route=%s gateways=%d\n", objName, len(resourcesPerGateway))
+	for gw, rs := range resourcesPerGateway {
+		fmt.Printf("DEBUG:   gw=%s total_resources=%d\n", gw.String(), len(rs))
 	}
 	return resourcesPerGateway
+}
+
+// reasonResolvedRefs picks a ResolvedRefs reason from a conversion failure condition.
+// Falls back to "ResolvedRefs" (when ok) or "Invalid" (when not ok and no specific reason).
+func reasonResolvedRefs(cond *reporter.RouteCondition, ok bool) gwv1.RouteConditionReason {
+	if ok {
+		return gwv1.RouteReasonResolvedRefs
+	}
+	if cond != nil && cond.Reason != "" {
+		return cond.Reason
+	}
+	return gwv1.RouteConditionReason("Invalid")
+}
+
+// buildAttachedRoutesMapAllowed is the same as buildAttachedRoutesMap,
+// but only for already-evaluated, allowed parentRefs.
+func buildAttachedRoutesMapAllowed(
+	allowedParents []routeParentReference,
+	routeNN types.NamespacedName,
+) map[types.NamespacedName]map[string]uint {
+	attached := make(map[types.NamespacedName]map[string]uint)
+	type attachKey struct {
+		gw       types.NamespacedName
+		listener string
+		route    types.NamespacedName
+	}
+	seen := make(map[attachKey]struct{})
+
+	for i, parent := range allowedParents {
+		if parent.ParentKey.Kind != wellknown.GatewayGVK {
+			continue
+		}
+		gw := types.NamespacedName{Namespace: parent.ParentKey.Namespace, Name: parent.ParentKey.Name}
+		lis := string(parent.ParentSection)
+
+		fmt.Printf("ATTACH-COUNT: route=%s gw=%s listener=%q (idx=%d)\n",
+			routeNN.String(), gw.String(), lis, i)
+
+		k := attachKey{gw: gw, listener: lis, route: routeNN}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+
+		if attached[gw] == nil {
+			attached[gw] = make(map[string]uint)
+		}
+		attached[gw][lis]++
+	}
+
+	fmt.Printf("ATTACH-COUNT-SUMMARY: route=%s -> %d gateways\n", routeNN.String(), len(attached))
+	for gw, m := range attached {
+		for lis, c := range m {
+			fmt.Printf("  gw=%s listener=%q count+=%d\n", gw.String(), lis, c)
+		}
+	}
+	return attached
 }
 
 // createRouteCollection is a generic helper function that creates a KRT collection for any route type
@@ -195,9 +394,18 @@ func createRouteCollection[T controllers.Object](
 		parentRefs, gwResult := computeRoute(ctx, obj, func(obj T) iter.Seq2[ADPRoute, *reporter.RouteCondition] {
 			return translatorSeq
 		})
+		fmt.Printf("DEBUG: route %s/%s parents=%d\n", obj.GetNamespace(), obj.GetName(), len(parentRefs))
+
+		for i, p := range parentRefs {
+			fmt.Printf("DEBUG:   [%d] gw=%s/%s section=%q internalName=%q\n",
+				i,
+				p.ParentKey.Namespace, p.ParentKey.Name,
+				string(p.ParentSection), p.InternalName)
+		}
 
 		// gateway -> section name -> route count
-		attachedRoutes := buildAttachedRoutesMap(parentRefs)
+		routeNN := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+		attachedRoutes := buildAttachedRoutesMap(parentRefs, routeNN)
 
 		resourcesPerGateway := processParentReferences(
 			parentRefs,
@@ -212,14 +420,26 @@ func createRouteCollection[T controllers.Object](
 				return toADPResource(ADPRoute{Route: inner})
 			},
 		)
-
 		var results []ADPResourcesForGateway
+		seen := make(map[types.NamespacedName]struct{})
+		// First: gateways that produced resources.
 		for gw, res := range resourcesPerGateway {
-			var attachedRoutesForGw map[string]uint
+			var ar map[string]uint
 			if attachedRoutes[gw] != nil {
-				attachedRoutesForGw = attachedRoutes[gw]
+				ar = attachedRoutes[gw]
 			}
-			results = append(results, toResourceWithRoutes(gw, res, attachedRoutesForGw, rm))
+			results = append(results, toResourceWithRoutes(gw, res, ar, rm))
+			seen[gw] = struct{}{}
+		}
+		// Second: gateways that had parentRefs (so attachedRoutes) but no resources (e.g., unresolved refs).
+		for gw, ar := range attachedRoutes {
+			if _, ok := seen[gw]; ok {
+				continue
+			}
+			// ensure an entry with just the counts
+			results = append(results, toResourceWithRoutes(gw, []*api.Resource{}, ar, rm))
+			fmt.Printf("DEBUG: ensure ADPResourcesForGateway for gw=%s/%s with only attachedRoutes=%v\n",
+				gw.Namespace, gw.Name, ar)
 		}
 		return results
 	}, krtopts.ToOptions(collectionName)...)
@@ -249,9 +469,17 @@ func createTCPRouteCollection[T controllers.Object](
 		parentRefs, gwResult := computeRoute(ctx, obj, func(obj T) iter.Seq2[ADPTCPRoute, *reporter.RouteCondition] {
 			return translatorSeq
 		})
+		fmt.Printf("DEBUG: route %s/%s parents=%d\n", obj.GetNamespace(), obj.GetName(), len(parentRefs))
+		for i, p := range parentRefs {
+			fmt.Printf("DEBUG:   [%d] gw=%s/%s section=%q internalName=%q\n",
+				i,
+				p.ParentKey.Namespace, p.ParentKey.Name,
+				string(p.ParentSection), p.InternalName)
+		}
 
 		// gateway -> section name -> route count
-		attachedRoutes := buildAttachedRoutesMap(parentRefs)
+		routeNN := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+		attachedRoutes := buildAttachedRoutesMap(parentRefs, routeNN)
 
 		resourcesPerGateway := processParentReferences(
 			parentRefs,
@@ -268,12 +496,24 @@ func createTCPRouteCollection[T controllers.Object](
 		)
 
 		var results []ADPResourcesForGateway
+		seen := make(map[types.NamespacedName]struct{})
 		for gw, res := range resourcesPerGateway {
-			var attachedRoutesForGw map[string]uint
+			var ar map[string]uint
 			if attachedRoutes[gw] != nil {
-				attachedRoutesForGw = attachedRoutes[gw]
+				ar = attachedRoutes[gw]
 			}
-			results = append(results, toResourceWithRoutes(gw, res, attachedRoutesForGw, rm))
+			results = append(results, toResourceWithRoutes(gw, res, ar, rm))
+			seen[gw] = struct{}{}
+			fmt.Printf("DEBUG: emit gw=%s/%s resources=%d attachedRoutes=%v\n",
+				gw.Namespace, gw.Name, len(res), ar)
+		}
+		for gw, ar := range attachedRoutes {
+			if _, ok := seen[gw]; ok {
+				continue
+			}
+			results = append(results, toResourceWithRoutes(gw, []*api.Resource{}, ar, rm))
+			fmt.Printf("DEBUG: emit (no resources) gw=%s/%s attachedRoutes=%v\n",
+				gw.Namespace, gw.Name, ar)
 		}
 		return results
 	}, krtopts.ToOptions(collectionName)...)
