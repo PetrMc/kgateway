@@ -115,7 +115,7 @@ func convertHTTPRouteToADP(ctx RouteContext, r gwv1.HTTPRouteRule,
 	res.Hostnames = slices.Map(obj.Spec.Hostnames, func(h gwv1.Hostname) string { return string(h) })
 
 	// If the backendRef Kind is invalid, inject an AgentGateway DirectResponse(500).
-	if backendErr != nil && backendErr.Reason == gwv1.RouteReasonInvalidKind {
+	if backendErr != nil && (backendErr.Reason == gwv1.RouteReasonInvalidKind || backendErr.Reason == gwv1.RouteReasonRefNotPermitted || backendErr.Reason == gwv1.RouteReasonBackendNotFound) {
 		// Build once
 		drf := &api.RouteFilter{
 			Kind: &api.RouteFilter_DirectResponse{

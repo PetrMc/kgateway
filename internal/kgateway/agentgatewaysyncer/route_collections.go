@@ -168,21 +168,23 @@ func buildAttachedRoutesMap(
 	return attached
 }
 
-// processParentReferences processes filtered parent references and builds resources per gateway
-// DEBUG logging added to print gw, listener, route, and decisions.
+// processParentReferences processes filtered parent references and builds resources per gateway.
+// It emits exactly one ParentStatus per Gateway (aggregate across listeners).
+// If no listeners are allowed, the Accepted reason is:
+//   - NotAllowedByListeners  => when the parent Gateway is cross-namespace w.r.t. the route
+//   - NoMatchingListenerHostname => otherwise
 func processParentReferences[T any](
 	parentRefs []routeParentReference,
 	gwResult conversionResult[T],
-	objName string,
+	routeNN types.NamespacedName, // <-- route namespace/name so we can detect cross-NS parents
 	routeReporter reporter.RouteReporter,
 	resourceMapper func(T, routeParentReference) *api.Resource,
 ) map[types.NamespacedName][]*api.Resource {
 	resourcesPerGateway := make(map[types.NamespacedName][]*api.Resource)
 
-	fmt.Printf("DEBUG: processParentReferences: route=%s parents=%d\n", objName, len(parentRefs))
+	fmt.Printf("DEBUG: processParentReferences: route=%s parents=%d\n", routeNN.String(), len(parentRefs))
 
-	// Build the "allowed" set from filteredReferences so we can attach only permitted ones,
-	// but aggregate status per-Gateway across listeners.
+	// Build the "allowed" set from filteredReferences (listener-scoped).
 	allowed := make(map[string]struct{})
 	for _, p := range filteredReferences(parentRefs) {
 		if p.ParentKey.Kind != wellknown.GatewayGVK {
@@ -191,13 +193,15 @@ func processParentReferences[T any](
 		k := fmt.Sprintf("%s/%s/%s/%s", p.ParentKey.Namespace, p.ParentKey.Name, p.ParentKey.Kind, string(p.ParentSection))
 		allowed[k] = struct{}{}
 	}
-	// Aggregate per Gateway so we emit exactly ONE ParentStatus per Gateway.
+
+	// Aggregate per Gateway for status; also track whether any raw parent was cross-namespace.
 	type gwAgg struct {
 		anyAllowed bool
-		rep        routeParentReference // representative to build ParentRef (sans SectionName)
+		rep        routeParentReference
 	}
 	agg := make(map[types.NamespacedName]*gwAgg)
-	// Seed aggregator from ALL raw parent refs (so gateways with no allowed listeners still get a status)
+	crossNS := make(map[types.NamespacedName]bool)
+
 	for _, p := range parentRefs {
 		if p.ParentKey.Kind != wellknown.GatewayGVK {
 			continue
@@ -206,18 +210,22 @@ func processParentReferences[T any](
 		if _, ok := agg[gwNN]; !ok {
 			agg[gwNN] = &gwAgg{anyAllowed: false, rep: p}
 		}
+		if p.ParentKey.Namespace != routeNN.Namespace {
+			crossNS[gwNN] = true
+		}
 	}
 
-	// Route-wide ref resolution: if conversion failed, ResolvedRefs should be False for all parents.
+	// If conversion (backend/filter resolution) failed, ResolvedRefs=False for all parents.
 	resolvedOK := (gwResult.error == nil)
 
+	// Consider each raw parentRef (listener-scoped) for mapping.
 	idx := 0
-	for _, parent := range parentRefs { // iterate ALL raw refs (not just filtered)
+	for _, parent := range parentRefs {
 		idx++
 
 		if parent.ParentKey.Kind != wellknown.GatewayGVK {
 			fmt.Printf("DEBUG: [%d] SKIP non-Gateway kind=%q route=%s parent=%s/%s listener=%q\n",
-				idx, parent.ParentKey.Kind, objName, parent.ParentKey.Namespace, parent.ParentKey.Name, string(parent.ParentSection))
+				idx, parent.ParentKey.Kind, routeNN.String(), parent.ParentKey.Namespace, parent.ParentKey.Name, string(parent.ParentSection))
 			continue
 		}
 
@@ -226,44 +234,39 @@ func processParentReferences[T any](
 		keyStr := fmt.Sprintf("%s/%s/%s/%s", parent.ParentKey.Namespace, parent.ParentKey.Name, parent.ParentKey.Kind, listener)
 		_, isAllowed := allowed[keyStr]
 
-		fmt.Printf("DEBUG: [%d] CONSIDER route=%s gw=%s listener=%q allowed=%v\n", idx, objName, gwNN.String(), listener, isAllowed)
-		// Aggregate acceptance regardless of ref resolution so that:
-		// - Accepted=True if any listener hostname matches (even if backend refs are invalid)
-		// - ResolvedRefs will be False when conversion failed
+		fmt.Printf("DEBUG: [%d] CONSIDER route=%s gw=%s listener=%q allowed=%v\n",
+			idx, routeNN.String(), gwNN.String(), listener, isAllowed)
+
 		if isAllowed {
 			if a := agg[gwNN]; a != nil {
 				a.anyAllowed = true
 			}
 		}
-		// If not allowed by hostname/section, nothing to map for this listener.
+
+		// Only attach resources when listener is allowed. Even if ResolvedRefs is false,
+		// we still attach so any DirectResponse policy can return 5xx as required.
 		if !isAllowed {
 			continue
 		}
-		// Allowed path: map resources (may be zero) and set positive conditions.
+
 		var mapped []*api.Resource
-		{
-			routes := gwResult.routes
-			mapped = make([]*api.Resource, 0, len(routes))
-			for i := range routes {
-				if r := resourceMapper(routes[i], parent); r != nil {
-					mapped = append(mapped, r)
-				}
+		routes := gwResult.routes
+		mapped = make([]*api.Resource, 0, len(routes))
+		for i := range routes {
+			if r := resourceMapper(routes[i], parent); r != nil {
+				mapped = append(mapped, r)
 			}
 		}
 
-		fmt.Printf("DEBUG: STORING route report for %s with parent %s\n", objName, gwNN.String())
+		fmt.Printf("DEBUG: STORING route report for %s with parent %s\n", routeNN.String(), gwNN.String())
 		fmt.Printf("DEBUG: [%d] ACCEPT route=%s gw=%s listener=%q resources=%d\n",
-			idx, objName, gwNN.String(), listener, len(mapped))
+			idx, routeNN.String(), gwNN.String(), listener, len(mapped))
 
-		if resourcesPerGateway[gwNN] == nil {
-			resourcesPerGateway[gwNN] = make([]*api.Resource, 0, len(mapped))
-		}
 		resourcesPerGateway[gwNN] = append(resourcesPerGateway[gwNN], mapped...)
 	}
 
-	// Emit exactly ONE ParentStatus per Gateway (aggregate across listeners).
+	// Emit exactly ONE ParentStatus per Gateway (aggregate across listeners; no SectionName).
 	for gwNN, a := range agg {
-		// Build a fully-qualified ParentRef for status WITHOUT SectionName (per-Gateway status).
 		parent := a.rep
 		prStatusRef := parent.OriginalReference
 		{
@@ -274,10 +277,11 @@ func processParentReferences[T any](
 			prStatusRef.Kind = &k
 			prStatusRef.Namespace = &ns
 			prStatusRef.Name = gwv1.ObjectName(parent.ParentKey.Name)
-			prStatusRef.SectionName = nil // aggregate by Gateway, not listener
+			prStatusRef.SectionName = nil
 		}
 		pr := routeReporter.ParentRef(&prStatusRef)
-		reason := reasonResolvedRefs(gwResult.error, resolvedOK)
+		resolvedReason := reasonResolvedRefs(gwResult.error, resolvedOK)
+
 		if a.anyAllowed {
 			pr.SetCondition(reporter.RouteCondition{
 				Type:   gwv1.RouteConditionAccepted,
@@ -285,14 +289,29 @@ func processParentReferences[T any](
 				Reason: gwv1.RouteReasonAccepted,
 			})
 		} else {
+			// Nothing attached: choose reason based on *why* it wasn't allowed.
+			// Priority:
+			// 1) Cross-namespace and listeners don’t allow it -> NotAllowedByListeners
+			// 2) sectionName specified but no such listener on the parent -> NoMatchingParent
+			// 3) Otherwise, no hostname intersection -> NoMatchingListenerHostname
+			reason := gwv1.RouteConditionReason("NoMatchingListenerHostname")
+			msg := "No route hostnames intersect any listener hostname"
+			if crossNS[gwNN] {
+				reason = gwv1.RouteReasonNotAllowedByListeners
+				msg = "Parent listener not usable or not permitted"
+			} else if a.rep.OriginalReference.SectionName != nil {
+				// Use string literal to avoid compile issues if the constant name differs.
+				reason = gwv1.RouteConditionReason("NoMatchingParent")
+				msg = "No listener with the specified sectionName on the parent Gateway"
+			}
 			pr.SetCondition(reporter.RouteCondition{
 				Type:    gwv1.RouteConditionAccepted,
 				Status:  metav1.ConditionFalse,
-				Reason:  gwv1.RouteConditionReason("NoMatchingListenerHostname"),
-				Message: "No route hostnames intersect any listener hostname",
+				Reason:  reason,
+				Message: msg,
 			})
 		}
-		// ResolvedRefs reflects backend/filter resolution, not hostname attachment.
+
 		pr.SetCondition(reporter.RouteCondition{
 			Type: gwv1.RouteConditionResolvedRefs,
 			Status: func() metav1.ConditionStatus {
@@ -301,12 +320,14 @@ func processParentReferences[T any](
 				}
 				return metav1.ConditionFalse
 			}(),
-			Reason: reason,
+			Reason: resolvedReason,
 		})
-		fmt.Printf("DEBUG: EMIT ParentStatus gw=%s Accepted=%v ResolvedRefs=%v\n", gwNN.String(), a.anyAllowed, resolvedOK)
+
+		fmt.Printf("DEBUG: EMIT ParentStatus gw=%s Accepted=%v ResolvedRefs=%v crossNS=%v\n",
+			gwNN.String(), a.anyAllowed, resolvedOK, crossNS[gwNN])
 	}
 
-	fmt.Printf("DEBUG: processParentReferences DONE route=%s gateways=%d\n", objName, len(resourcesPerGateway))
+	fmt.Printf("DEBUG: processParentReferences DONE route=%s gateways=%d\n", routeNN.String(), len(resourcesPerGateway))
 	for gw, rs := range resourcesPerGateway {
 		fmt.Printf("DEBUG:   gw=%s total_resources=%d\n", gw.String(), len(rs))
 	}
@@ -405,12 +426,13 @@ func createRouteCollection[T controllers.Object](
 
 		// gateway -> section name -> route count
 		routeNN := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
-		attachedRoutes := buildAttachedRoutesMap(parentRefs, routeNN)
+		allowedParents := filteredReferences(parentRefs)
+		attachedRoutes := buildAttachedRoutesMapAllowed(allowedParents, routeNN)
 
 		resourcesPerGateway := processParentReferences(
 			parentRefs,
 			gwResult,
-			obj.GetName(),
+			types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, // was obj.GetName()
 			routeReporter,
 			func(e ADPRoute, parent routeParentReference) *api.Resource {
 				inner := protomarshal.Clone(e.Route)
@@ -420,6 +442,7 @@ func createRouteCollection[T controllers.Object](
 				return toADPResource(ADPRoute{Route: inner})
 			},
 		)
+
 		var results []ADPResourcesForGateway
 		seen := make(map[types.NamespacedName]struct{})
 		// First: gateways that produced resources.
@@ -479,19 +502,18 @@ func createTCPRouteCollection[T controllers.Object](
 
 		// gateway -> section name -> route count
 		routeNN := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
-		attachedRoutes := buildAttachedRoutesMap(parentRefs, routeNN)
+		allowedParents := filteredReferences(parentRefs)
+		attachedRoutes := buildAttachedRoutesMapAllowed(allowedParents, routeNN)
 
-		resourcesPerGateway := processParentReferences(
+		resourcesPerGateway := processParentReferences[ADPTCPRoute](
 			parentRefs,
 			gwResult,
-			obj.GetName(),
+			types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, // was obj.GetName()
 			routeReporter,
 			func(e ADPTCPRoute, parent routeParentReference) *api.Resource {
-				inner := protomarshal.Clone(e.TCPRoute)
-				_, name, _ := strings.Cut(parent.InternalName, "/")
-				inner.ListenerKey = name
-				inner.Key = inner.GetKey() + "." + string(parent.ParentSection)
-				return toADPResource(ADPTCPRoute{TCPRoute: inner})
+				// TCP route wrapper doesn't expose a `Route` field like HTTP.
+				// For TCP we don’t mutate ListenerKey/Key here; just pass through.
+				return toADPResource(e)
 			},
 		)
 
