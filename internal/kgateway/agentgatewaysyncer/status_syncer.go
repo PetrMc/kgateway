@@ -386,8 +386,14 @@ func (s *AgentGwStatusSyncer) syncGatewayStatus(ctx context.Context, logger *slo
 			}
 
 			fmt.Printf("DEBUG: About to call BuildGWStatus for %s\n", gwnn.String())
+			fmt.Printf("DEBUG: attachedRoutesForGw for %s: %#v\n", gwnn.String(), attachedRoutesForGw)
 
 			if status := rm.BuildGWStatus(ctx, gw, attachedRoutesForGw); status != nil {
+				// normalize per-listener AttachedRoutes, defaulting to 0 where absent.
+				normalizeListenerAttachedRoutes(&gw, status, attachedRoutesForGw)
+				fmt.Printf("DEBUG: attachedRoutesForGw for %s: %#v\n", gwnn.String(), attachedRoutesForGw)
+				fmt.Printf("DEBUG: status listeners after normalize for %s: %+v\n", gwnn.String(), status.Listeners)
+
 				setObservedGen(&gw, status)
 
 				fmt.Printf("DEBUG: BuildGWStatus returned status for %s, comparing...\n", gwnn.String())
@@ -418,6 +424,45 @@ func (s *AgentGwStatusSyncer) syncGatewayStatus(ctx context.Context, logger *slo
 	}
 	duration := stopwatch.Stop(ctx)
 	logger.Debug("synced gw status for gateways", "count", len(gatewayReports.Reports), "duration", duration)
+}
+// normalizeListenerAttachedRoutes ensures every spec listener has a ListenerStatus entry
+// and that AttachedRoutes reflects the provided counts (defaulting to 0).
+func normalizeListenerAttachedRoutes(gw *gwv1.Gateway, st *gwv1.GatewayStatus, counts map[string]uint) {
+	// Index existing listener statuses by name.
+	idx := make(map[string]int, len(st.Listeners))
+	for i := range st.Listeners {
+		idx[string(st.Listeners[i].Name)] = i
+	}
+
+	// Ensure each spec listener exists and set the count (0 if missing in counts).
+	for _, lis := range gw.Spec.Listeners {
+		name := string(lis.Name)
+		c := uint(0)
+		if counts != nil {
+			c = counts[name]
+		}
+
+		if j, ok := idx[name]; ok {
+			// Preserve any existing conditions, just set the count.
+			st.Listeners[j].AttachedRoutes = int32(c)
+		} else {
+			// Create a minimal status for the listener with the correct count.
+			st.Listeners = append(st.Listeners, gwv1.ListenerStatus{
+				Name:           lis.Name,
+				AttachedRoutes: int32(c),
+			})
+			idx[name] = len(st.Listeners) - 1
+		}
+	}
+
+	// Keep deterministic order: match spec.Listeners order.
+	ordered := make([]gwv1.ListenerStatus, 0, len(gw.Spec.Listeners))
+	for _, lis := range gw.Spec.Listeners {
+		if j, ok := idx[string(lis.Name)]; ok {
+			ordered = append(ordered, st.Listeners[j])
+		}
+	}
+	st.Listeners = ordered
 }
 
 // syncListenerSetStatus will build and update status for all Listener Sets in listener set reports

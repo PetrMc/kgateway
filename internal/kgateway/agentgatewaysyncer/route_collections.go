@@ -426,9 +426,18 @@ func createRouteCollection[T controllers.Object](
 
 		// gateway -> section name -> route count
 		routeNN := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+		allParentGWs := make(map[types.NamespacedName]struct{})
+		for _, p := range parentRefs {
+			if p.ParentKey.Kind != wellknown.GatewayGVK {
+				continue
+			}
+			gw := types.NamespacedName{Namespace: p.ParentKey.Namespace, Name: p.ParentKey.Name}
+			allParentGWs[gw] = struct{}{}
+		}
+		ln := listenersPerGateway(parentRefs)
 		allowedParents := filteredReferences(parentRefs)
 		attachedRoutes := buildAttachedRoutesMapAllowed(allowedParents, routeNN)
-
+		ensureZeroes(attachedRoutes, ln)
 		resourcesPerGateway := processParentReferences(
 			parentRefs,
 			gwResult,
@@ -436,9 +445,18 @@ func createRouteCollection[T controllers.Object](
 			routeReporter,
 			func(e ADPRoute, parent routeParentReference) *api.Resource {
 				inner := protomarshal.Clone(e.Route)
+
+				// Keep binding via internal listener name
 				_, name, _ := strings.Cut(parent.InternalName, "/")
 				inner.ListenerKey = name
-				inner.Key = inner.GetKey() + "." + string(parent.ParentSection)
+
+				// Only suffix with sectionName when it exists
+				if sec := string(parent.ParentSection); sec != "" {
+					inner.Key = inner.GetKey() + "." + sec
+				} else {
+					inner.Key = inner.GetKey()
+				}
+
 				return toADPResource(ADPRoute{Route: inner})
 			},
 		)
@@ -463,6 +481,23 @@ func createRouteCollection[T controllers.Object](
 			results = append(results, toResourceWithRoutes(gw, []*api.Resource{}, ar, rm))
 			fmt.Printf("DEBUG: ensure ADPResourcesForGateway for gw=%s/%s with only attachedRoutes=%v\n",
 				gw.Namespace, gw.Name, ar)
+		}
+		allParents := make(map[types.NamespacedName]struct{})
+		for _, p := range parentRefs {
+			if p.ParentKey.Kind != wellknown.GatewayGVK {
+				continue
+			}
+			gw := types.NamespacedName{Namespace: p.ParentKey.Namespace, Name: p.ParentKey.Name}
+			allParents[gw] = struct{}{}
+		}
+
+		for gw := range allParents {
+			if _, ok := seen[gw]; ok {
+				continue
+			}
+			// attachedRoutes may be nil here; that’s fine — the status normalizer sets zeros.
+			results = append(results, toResourceWithRoutes(gw, []*api.Resource{}, attachedRoutes[gw], rm))
+			fmt.Printf("DEBUG: ensure ADPResourcesForGateway for gw=%s/%s (no resources; counts=%v)\n", gw.Namespace, gw.Name, attachedRoutes[gw])
 		}
 		return results
 	}, krtopts.ToOptions(collectionName)...)
@@ -502,9 +537,20 @@ func createTCPRouteCollection[T controllers.Object](
 
 		// gateway -> section name -> route count
 		routeNN := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+		allParentGWs := make(map[types.NamespacedName]struct{})
+		for _, p := range parentRefs {
+			if p.ParentKey.Kind != wellknown.GatewayGVK {
+				continue
+			}
+			gw := types.NamespacedName{Namespace: p.ParentKey.Namespace, Name: p.ParentKey.Name}
+			allParentGWs[gw] = struct{}{}
+		}
+
+		// 2) collect all referenced listeners per GW (allowed or not)
+		ln := listenersPerGateway(parentRefs)
 		allowedParents := filteredReferences(parentRefs)
 		attachedRoutes := buildAttachedRoutesMapAllowed(allowedParents, routeNN)
-
+		ensureZeroes(attachedRoutes, ln)
 		resourcesPerGateway := processParentReferences[ADPTCPRoute](
 			parentRefs,
 			gwResult,
@@ -539,6 +585,41 @@ func createTCPRouteCollection[T controllers.Object](
 		}
 		return results
 	}, krtopts.ToOptions(collectionName)...)
+}
+
+// listenersPerGateway returns the set of listener sectionNames referenced for each parent Gateway,
+// regardless of whether they are allowed.
+func listenersPerGateway(parentRefs []routeParentReference) map[types.NamespacedName]map[string]struct{} {
+	l := make(map[types.NamespacedName]map[string]struct{})
+	for _, p := range parentRefs {
+		if p.ParentKey.Kind != wellknown.GatewayGVK {
+			continue
+		}
+		gw := types.NamespacedName{Namespace: p.ParentKey.Namespace, Name: p.ParentKey.Name}
+		if l[gw] == nil {
+			l[gw] = make(map[string]struct{})
+		}
+		l[gw][string(p.ParentSection)] = struct{}{}
+	}
+	return l
+}
+
+// ensureZeroes pre-populates attachedRoutes with explicit 0 entries for every referenced listener,
+// so writers that "replace" rather than "merge" will correctly set zero.
+func ensureZeroes(
+	attached map[types.NamespacedName]map[string]uint,
+	ln map[types.NamespacedName]map[string]struct{},
+) {
+	for gw, set := range ln {
+		if attached[gw] == nil {
+			attached[gw] = make(map[string]uint)
+		}
+		for lis := range set {
+			if _, ok := attached[gw][lis]; !ok {
+				attached[gw][lis] = 0
+			}
+		}
+	}
 }
 
 type conversionResult[O any] struct {
