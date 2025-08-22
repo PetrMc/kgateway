@@ -80,11 +80,19 @@ func (a *index) serviceServiceBuilder(
 		}
 
 		svc := a.constructService(ctx, s)
+		fmt.Printf("DEBUG: Processing Service %s/%s, hasSelector=%t\n", svc.Namespace, svc.Name, len(s.Spec.Selector) > 0)
 		return precomputeServicePtr(&ServiceInfo{
 			Service:       svc,
 			PortNames:     portNames,
 			LabelSelector: NewSelector(s.Spec.Selector),
-			Source:        MakeSource(s),
+			Source: TypedObject{
+				NamespacedName: types.NamespacedName{
+					Namespace: s.Namespace,
+					Name:      s.Name,
+				},
+				Kind: "Service",
+			},
+			HasSelector:   len(s.Spec.Selector) > 0,
 		})
 	}
 }
@@ -129,6 +137,7 @@ func (a *index) inferencePoolBuilder(
 				},
 				Kind: "InferencePool", // TODO: get wellknown kind
 			},
+			HasSelector: len(s.Spec.Selector) > 0,
 		})
 	}
 }
@@ -702,6 +711,8 @@ type ServiceInfo struct {
 	PortNames map[int32]ServicePortName
 	// Source is the type that introduced this service.
 	Source TypedObject
+	// True if the originating K8s Service had a non-empty .spec.selector
+	HasSelector bool
 	// MarshaledAddress contains the pre-marshaled representation.
 	// Note: this is an Address -- not a Service.
 	MarshaledAddress *anypb.Any

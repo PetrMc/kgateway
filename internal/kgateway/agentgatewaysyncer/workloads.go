@@ -481,94 +481,214 @@ func (a *index) endpointSlicesBuilder(
 	workloadServices krt.Collection[ServiceInfo],
 ) krt.TransformationMulti[*discovery.EndpointSlice, WorkloadInfo] {
 	return func(ctx krt.HandlerContext, es *discovery.EndpointSlice) []WorkloadInfo {
-		// EndpointSlices carry port information and a list of IPs.
-		// We only care about EndpointSlices that are for a Service.
-		// Otherwise, it is just an arbitrary bag of IP addresses for some user-specific purpose, which doesn't have a clear
-		// usage for us (if it had some additional info like service account, etc, then perhaps it would be useful).
+		fmt.Printf("DEBUG: Processing EndpointSlice %s/%s\n", es.Namespace, es.Name)
+
+		// Get service name first
 		serviceName, f := es.Labels[discovery.LabelServiceName]
 		if !f {
 			return nil
 		}
+
+		// Generate the service key
+		serviceKey := es.Namespace + "/" + kubeutils.GetServiceHostname(serviceName, es.Namespace)
+
+		// Now use the serviceKey for debugging
+		allServicesForDebugging := krt.Fetch(ctx, workloadServices, krt.FilterKey(serviceKey))
+		fmt.Printf("DEBUG: FilterKey found %d services for key %s\n", len(allServicesForDebugging), serviceKey)
+		for i, svc := range allServicesForDebugging {
+			fmt.Printf("DEBUG: Service[%d] Source.Kind='%s', expected='%s'\n", i, svc.Source.Kind, kind.Service.String())
+		}
+
+		allServices := krt.Fetch(ctx, workloadServices)
+		fmt.Printf("DEBUG: EndpointSlice %s/%s - workloadServices has %d services\n", es.Namespace, es.Name, len(allServices))
+
+		// Check if our target services exist
+		for _, svc := range allServices {
+			if svc.Service.Name == "manual-endpointslices" || svc.Service.Name == "headless-manual-endpointslices" {
+				svcKey := svc.Service.Namespace + "/" + kubeutils.GetServiceHostname(svc.Service.Name, svc.Service.Namespace)
+				fmt.Printf("DEBUG: Found target service %s, key=%s\n", svc.Service.Name, svcKey)
+			}
+		}
 		if es.AddressType == discovery.AddressTypeFQDN {
 			// Currently we do not support FQDN. In theory, we could, but its' support in Kubernetes entirely is questionable and
 			// may be removed in the near future.
+			fmt.Printf("DEBUG: EndpointSlice %s/%s has FQDN address type, skipping\n", es.Namespace, es.Name)
 			return nil
 		}
+		fmt.Printf("DEBUG: EndpointSlice %s/%s has address type %s\n", es.Namespace, es.Name, es.AddressType)
+
 		var res []WorkloadInfo
 		seen := sets.New[string]()
 
-		// The slice must be for a single service, based on the label above.
-		serviceKey := es.Namespace + "/" + kubeutils.GetServiceHostname(serviceName, es.Namespace)
+		fmt.Printf("DEBUG: Looking for service with key: %s\n", serviceKey)
+
 		svcs := krt.Fetch(ctx, workloadServices, krt.FilterKey(serviceKey), krt.FilterGeneric(func(a any) bool {
 			// Only find Service, not Service Entry
 			return a.(ServiceInfo).Source.Kind == kind.Service.String()
 		}))
+		fmt.Printf("DEBUG: Found %d services for key %s\n", len(svcs), serviceKey)
+
 		if len(svcs) == 0 {
 			// no service found
+			fmt.Printf("DEBUG: No service found for key %s, skipping EndpointSlice\n", serviceKey)
 			return nil
 		}
 		// There SHOULD only be one. This is only Service which has unique hostnames.
 		svc := svcs[0]
+		fmt.Printf("DEBUG: Using service %s, HasSelector: %t\n", svc.Service.Name, svc.HasSelector)
+
+		// Services without a selector rely solely on EndpointSlices for membership.
+		// For those, do NOT skip Pod TargetRefs.
+		manualSvc := !svc.HasSelector
+		fmt.Printf("DEBUG: manualSvc = %t (based on HasSelector = %t)\n", manualSvc, svc.HasSelector)
 
 		// Translate slice ports to our port.
 		pl := &api.PortList{Ports: make([]*api.Port, 0, len(es.Ports))}
-		for _, p := range es.Ports {
-			// We must have name and port (Kubernetes should always set these)
-			if p.Name == nil {
-				continue
-			}
+		fmt.Printf("DEBUG: EndpointSlice has %d ports\n", len(es.Ports))
+
+		for i, p := range es.Ports {
+			fmt.Printf("DEBUG: Processing port %d: name=%s, port=%v, protocol=%v\n", i,
+				func() string {
+					if p.Name != nil {
+						return *p.Name
+					} else {
+						return "<nil>"
+					}
+				}(),
+				func() interface{} {
+					if p.Port != nil {
+						return *p.Port
+					} else {
+						return "<nil>"
+					}
+				}(),
+				func() interface{} {
+					if p.Protocol != nil {
+						return *p.Protocol
+					} else {
+						return "<nil>"
+					}
+				}())
+
+			// Must have a concrete port number
 			if p.Port == nil {
+				fmt.Printf("DEBUG: Port %d has nil port number, skipping\n", i)
 				continue
 			}
-			// We only support TCP for now
-			if p.Protocol == nil || *p.Protocol != corev1.ProtocolTCP {
+			// Treat nil protocol as TCP (common in manual EndpointSlices). Only skip if explicitly non-TCP.
+			if p.Protocol != nil && *p.Protocol != corev1.ProtocolTCP {
+				fmt.Printf("DEBUG: Port %d has non-TCP protocol %s, skipping\n", i, *p.Protocol)
 				continue
 			}
 			// Endpoint slice port has name (service port name, not containerPort) and port (targetPort)
 			// We need to join with the Service port list to translate the port name to
-			for _, svcPort := range svc.Service.Ports {
+			fmt.Printf("DEBUG: Service has %d ports\n", len(svc.Service.Ports))
+
+			portMatched := false
+			for j, svcPort := range svc.Service.Ports {
 				portName := svc.PortNames[int32(svcPort.ServicePort)]
-				if portName.PortName != *p.Name {
+				fmt.Printf("DEBUG: Checking service port %d: ServicePort=%d, PortName=%s, against EndpointSlice port name=%s\n",
+					j, svcPort.ServicePort, portName.PortName,
+					func() string {
+						if p.Name != nil {
+							return *p.Name
+						} else {
+							return "<nil>"
+						}
+					}())
+
+				if p.Name == nil {
+					fmt.Printf("DEBUG: EndpointSlice port name is nil, skipping this service port\n")
 					continue
 				}
+
+				if portName.PortName != *p.Name {
+					fmt.Printf("DEBUG: Port names don't match: service=%s, endpointslice=%s\n", portName.PortName, *p.Name)
+					continue
+				}
+
+				fmt.Printf("DEBUG: Port matched! Adding port: ServicePort=%d, TargetPort=%d\n", svcPort.ServicePort, *p.Port)
 				pl.Ports = append(pl.Ports, &api.Port{
 					ServicePort: svcPort.ServicePort,
 					TargetPort:  uint32(*p.Port),
 				})
+				portMatched = true
 				break
 			}
+
+			if !portMatched {
+				fmt.Printf("DEBUG: No matching service port found for EndpointSlice port %s\n",
+					func() string {
+						if p.Name != nil {
+							return *p.Name
+						} else {
+							return "<nil>"
+						}
+					}())
+			}
 		}
+
+		fmt.Printf("DEBUG: Final port list has %d ports\n", len(pl.Ports))
+
 		services := map[string]*api.PortList{
 			serviceKey: pl,
 		}
 
 		// Each endpoint in the slice is going to create a Workload
-		for _, ep := range es.Endpoints {
-			if ep.TargetRef != nil && ep.TargetRef.Kind == gvk.Pod.Kind {
-				// Normal case; this is a slice for a pod. We already handle pods, with much more information, so we can skip them
+		fmt.Printf("DEBUG: EndpointSlice has %d endpoints\n", len(es.Endpoints))
+
+		for i, ep := range es.Endpoints {
+			fmt.Printf("DEBUG: Processing endpoint %d: addresses=%v, targetRef=%v\n", i, ep.Addresses,
+				func() string {
+					if ep.TargetRef != nil {
+						return fmt.Sprintf("Kind=%s, Name=%s", ep.TargetRef.Kind, ep.TargetRef.Name)
+					}
+					return "<nil>"
+				}())
+
+			if ep.TargetRef != nil && ep.TargetRef.Kind == gvk.Pod.Kind && !manualSvc {
+				// Selector-based Service: we already attach it via Pod workload; skip to avoid duplication.
+				fmt.Printf("DEBUG: Skipping endpoint %d because it has Pod TargetRef and service is not manual (manualSvc=%t)\n", i, manualSvc)
 				continue
 			}
+
 			// This should not be possible
 			if len(ep.Addresses) == 0 {
+				fmt.Printf("DEBUG: Endpoint %d has no addresses, skipping\n", i)
 				continue
 			}
+
 			// We currently only support 1 address. Kubernetes will never set more (IPv4 and IPv6 will be two slices), so its mostly undefined.
 			key := ep.Addresses[0]
+			fmt.Printf("DEBUG: Processing endpoint %d with key=%s\n", i, key)
+
 			if seen.InsertContains(key) {
 				// Shouldn't happen. Make sure our UID is actually unique
+				fmt.Printf("DEBUG: IP address %v seen twice in %v/%v, skipping\n", key, es.Namespace, es.Name)
 				log.Warnf("IP address %v seen twice in %v/%v", key, es.Namespace, es.Name)
 				continue
 			}
+
 			health := api.WorkloadStatus_UNHEALTHY
 			if ep.Conditions.Ready == nil || *ep.Conditions.Ready {
 				health = api.WorkloadStatus_HEALTHY
 			}
+			fmt.Printf("DEBUG: Endpoint %d health status: %s (Ready=%v)\n", i, health,
+				func() interface{} {
+					if ep.Conditions.Ready != nil {
+						return *ep.Conditions.Ready
+					} else {
+						return "<nil>"
+					}
+				}())
+
 			// Translate our addresses.
 			// Note: users may put arbitrary addresses here. It is recommended by Kubernetes to not
 			// give untrusted users EndpointSlice write access.
 			addresses, err := slices.MapErr(ep.Addresses, func(e string) ([]byte, error) {
 				n, err := netip.ParseAddr(e)
 				if err != nil {
+					fmt.Printf("DEBUG: Invalid address in endpointslice %v: %v\n", e, err)
 					log.Warnf("invalid address in endpointslice %v: %v", e, err)
 					return nil, err
 				}
@@ -576,8 +696,10 @@ func (a *index) endpointSlicesBuilder(
 			})
 			if err != nil {
 				// If any invalid, skip
+				fmt.Printf("DEBUG: Skipping endpoint %d due to invalid addresses: %v\n", i, err)
 				continue
 			}
+
 			w := &api.Workload{
 				Uid:       a.ClusterID + "/discovery.k8s.io/EndpointSlice/" + es.Namespace + "/" + es.Name + "/" + key,
 				Name:      es.Name,
@@ -595,6 +717,9 @@ func (a *index) endpointSlicesBuilder(
 				ServiceAccount:        "",  // Unknown.
 				Locality:              nil, // Not supported. We could maybe, there is a "zone", but it doesn't seem to be well supported
 			}
+
+			fmt.Printf("DEBUG: Created workload with UID: %s\n", w.Uid)
+
 			res = append(res, precomputeWorkload(WorkloadInfo{
 				Workload:     w,
 				Labels:       nil,
@@ -603,6 +728,7 @@ func (a *index) endpointSlicesBuilder(
 			}))
 		}
 
+		fmt.Printf("DEBUG: Returning %d workloads for EndpointSlice %s/%s\n", len(res), es.Namespace, es.Name)
 		return res
 	}
 }
