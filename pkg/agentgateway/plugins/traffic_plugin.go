@@ -16,11 +16,13 @@ import (
 	"github.com/kgateway-dev/kgateway/v2/internal/kgateway/wellknown"
 	"github.com/kgateway-dev/kgateway/v2/pkg/logging"
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/kubeutils"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const (
-	extauthPolicySuffix = ":extauth"
-	aiPolicySuffix      = ":ai"
+	extauthPolicySuffix   = ":extauth"
+	aiPolicySuffix        = ":ai"
+	rateLimitPolicySuffix = ":ratelimit"
 )
 
 // NewTrafficPlugin creates a new TrafficPolicy plugin
@@ -116,7 +118,11 @@ func translateTrafficPolicyToADP(ctx krt.HandlerContext, gatewayExtensions krt.C
 		aiPolicies := processAIPolicy(ctx, trafficPolicy, policyName, policyTarget)
 		adpPolicies = append(adpPolicies, aiPolicies...)
 	}
-
+	// Process RateLimit policies if present
+	if trafficPolicy.Spec.RateLimit != nil {
+		rateLimitPolicies := processRateLimitPolicy(trafficPolicy, policyName, policyTarget)
+		adpPolicies = append(adpPolicies, rateLimitPolicies...)
+	}
 	return adpPolicies
 }
 
@@ -438,4 +444,52 @@ func processModeration(moderation *v1alpha1.Moderation) *api.PolicySpec_Ai_Moder
 	}
 
 	return pgModeration
+}
+
+// processRateLimitPolicy processes RateLimit configuration and creates corresponding agentgateway policies
+func processRateLimitPolicy(trafficPolicy *v1alpha1.TrafficPolicy, policyName string, policyTarget *api.PolicyTarget) []ADPPolicy {
+	var adpPolicies []ADPPolicy
+
+	// Process local rate limiting if present
+	if trafficPolicy.Spec.RateLimit.Local != nil {
+		localPolicy := processLocalRateLimitPolicy(trafficPolicy, policyName, policyTarget)
+		if localPolicy != nil {
+			adpPolicies = append(adpPolicies, *localPolicy)
+		}
+	}
+
+	return adpPolicies
+}
+
+// processLocalRateLimitPolicy processes local rate limiting configuration
+func processLocalRateLimitPolicy(trafficPolicy *v1alpha1.TrafficPolicy, policyName string, policyTarget *api.PolicyTarget) *ADPPolicy {
+	if trafficPolicy.Spec.RateLimit.Local.TokenBucket == nil {
+		return nil
+	}
+
+	tokenBucket := trafficPolicy.Spec.RateLimit.Local.TokenBucket
+
+	// Convert duration to seconds for agentgateway
+	fillIntervalSeconds := uint32(tokenBucket.FillInterval.Duration.Seconds())
+	if fillIntervalSeconds == 0 {
+		fillIntervalSeconds = 1 // minimum 1 second
+	}
+
+	// Create local rate limit policy using the proper agentgateway API
+	localRateLimitPolicy := &api.Policy{
+		Name:   policyName + rateLimitPolicySuffix + ":local",
+		Target: policyTarget,
+		Spec: &api.PolicySpec{
+			Kind: &api.PolicySpec_LocalRateLimit_{
+				LocalRateLimit: &api.PolicySpec_LocalRateLimit{
+					MaxTokens:     uint64(tokenBucket.MaxTokens),
+					TokensPerFill: uint64(ptr.Deref(tokenBucket.TokensPerFill, 1)),
+					FillInterval:  &durationpb.Duration{Seconds: int64(fillIntervalSeconds)},
+					Type:          api.PolicySpec_LocalRateLimit_REQUEST,
+				},
+			},
+		},
+	}
+
+	return &ADPPolicy{Policy: localRateLimitPolicy}
 }
