@@ -1,0 +1,52 @@
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: local-rate-limit-policy
+  namespace: kgateway-test
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: test-route
+  rateLimit:
+    local:
+      tokenBucket:
+        maxTokens: 10
+        tokensPerFill: 2
+        fillInterval: 30s
+---
+# Alternative configuration with different rate limiting values
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: strict-rate-limit-policy
+  namespace: kgateway-test
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: test-route
+  rateLimit:
+    local:
+      tokenBucket:
+        maxTokens: 5
+        tokensPerFill: 1
+        fillInterval: 60s
+---
+# Gateway-level rate limiting
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: gateway-rate-limit-policy
+  namespace: kgateway-test
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: test-gateway
+  rateLimit:
+    local:
+      tokenBucket:
+        maxTokens: 100
+        tokensPerFill: 10
+        fillInterval: 10s
