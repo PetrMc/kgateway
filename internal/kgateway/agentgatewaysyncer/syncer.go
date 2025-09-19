@@ -582,6 +582,19 @@ func (s *Syncer) buildStatusReporting(policyStatuses map[schema.GroupKind]krt.St
 				}
 			}
 		}
+		
+		// Debug logging for GatewayReports generation
+		if len(merged) > 0 {
+			logger.Debug("generating GatewayReports", "proxyCount", len(proxies), "gatewayReports", len(merged), 
+				"gateways", func() []string {
+					var names []string
+					for gwnn := range merged {
+						names = append(names, gwnn.String())
+					}
+					return names
+				}())
+		}
+		
 		return &GatewayReports{
 			Reports:        merged,
 			AttachedRoutes: attached,

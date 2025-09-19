@@ -193,12 +193,18 @@ func (s *AgentGwStatusSyncer) syncTrafficPolicyStatus(ctx context.Context, logge
 		Name:      policyStatusUpdate.Obj.GetName(),
 	}
 
+	startTime := time.Now()
 	err := retry.Do(func() error {
 		trafficpolicy := v1alpha1.TrafficPolicy{}
 		err := s.mgr.GetClient().Get(ctx, policyNameNs, &trafficpolicy)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				logger.Debug("policy not found, skipping status update", "trafficpolicy", policyNameNs.String())
+				if time.Since(startTime) < 5*time.Second {
+					fmt.Println("policy not found, should retry")
+					// return err // Retry
+				}
+				// After timeout, assume genuinely deleted
+				logger.Error("policy not found after timeout, skipping status update", "trafficpolicy", policyNameNs.String())
 				return nil
 			}
 			logger.Error("error getting trafficpolicy", logKeyError, err, "trafficpolicy", policyNameNs.String())
@@ -454,7 +460,16 @@ func (s *AgentGwStatusSyncer) syncGatewayStatus(ctx context.Context, logger *slo
 	}
 
 	err := retry.Do(func() error {
+		logger.Debug("processing gateway reports", "count", len(gatewayReports.Reports), "gateways", func() []string {
+			var names []string
+			for gwnn := range gatewayReports.Reports {
+				names = append(names, gwnn.String())
+			}
+			return names
+		}())
+
 		for gwnn := range gatewayReports.Reports {
+			logger.Debug("processing gateway", logKeyGateway, gwnn.String())
 			gw := gwv1.Gateway{}
 			err := s.mgr.GetClient().Get(ctx, gwnn, &gw)
 			if err != nil {
@@ -470,6 +485,8 @@ func (s *AgentGwStatusSyncer) syncGatewayStatus(ctx context.Context, logger *slo
 				logger.Info("error getting gw", logKeyError, err, logKeyGateway, gwnn.String())
 				return err
 			}
+
+			logger.Debug("retrieved gateway", logKeyGateway, gwnn.String(), "generation", gw.Generation, "resourceVersion", gw.ResourceVersion)
 
 			// Only process agentgateway classes - others are handled by ProxySyncer
 			if string(gw.Spec.GatewayClassName) != s.agwClassName {
@@ -490,6 +507,8 @@ func (s *AgentGwStatusSyncer) syncGatewayStatus(ctx context.Context, logger *slo
 			}
 
 			if status := rm.BuildGWStatus(ctx, gw, attachedRoutesForGw); status != nil {
+				logger.Debug("built gateway status", logKeyGateway, gwnn.String(), "statusConditions", len(status.Conditions))
+
 				// Ensure basic Gateway conditions exist (agent-gateway bypasses normal reporter init)
 				ensureBasicGatewayConditions(status, gw.Generation)
 
@@ -497,16 +516,28 @@ func (s *AgentGwStatusSyncer) syncGatewayStatus(ctx context.Context, logger *slo
 				normalizeListenerAttachedRoutes(&gw, status, attachedRoutesForGw)
 				setObservedGen(&gw, status)
 
+				logger.Debug("prepared gateway status", logKeyGateway, gwnn.String(),
+					"newObservedGen", gw.Generation,
+					"oldObservedGen", func() int64 {
+						if len(gwStatusWithoutAddress.Conditions) > 0 {
+							return gwStatusWithoutAddress.Conditions[0].ObservedGeneration
+						}
+						return 0
+					}())
+
 				if !isGatewayStatusEqual(&gwStatusWithoutAddress, status) {
+					logger.Debug("gateway status changed, patching", logKeyGateway, gwnn.String())
 					gw.Status = *status
 					if err := s.mgr.GetClient().Status().Patch(ctx, &gw, client.Merge); err != nil {
 						logger.Error("error patching gateway status", logKeyError, err, logKeyGateway, gwnn.String())
 						return err
 					}
-					logger.Info("patched gw status", logKeyGateway, gwnn.String())
+					logger.Info("patched gw status", logKeyGateway, gwnn.String(), "generation", gw.Generation)
 				} else {
-					logger.Info("skipping k8s gateway status update, status equal", logKeyGateway, gwnn.String())
+					logger.Debug("skipping k8s gateway status update, status equal", logKeyGateway, gwnn.String())
 				}
+			} else {
+				logger.Debug("no gateway status built", logKeyGateway, gwnn.String())
 			}
 		}
 		return nil
@@ -580,11 +611,6 @@ func (s *AgentGwStatusSyncer) syncListenerSetStatus(ctx context.Context, logger 
 			ls := gwxv1a1.XListenerSet{}
 			err := s.mgr.GetClient().Get(ctx, lsnn, &ls)
 			if err != nil {
-				if apierrors.IsNotFound(err) {
-					// the listener set is not found, we can't report status on it
-					// if it's recreated, we'll retranslate it anyway
-					continue
-				}
 				if apierrors.IsNotFound(err) {
 					if time.Since(startTime) < 5*time.Second {
 						return err // Retry
