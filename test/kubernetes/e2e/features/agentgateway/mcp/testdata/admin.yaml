@@ -1,0 +1,52 @@
+---
+# Second MCP server for dynamic routing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-admin-server
+spec:
+  selector:
+    matchLabels:
+      app: mcp-admin-server
+  template:
+    metadata:
+      labels:
+        app: mcp-admin-server
+        app.kubernetes.io/name: mcp-admin-server
+    spec:
+      containers:
+      - name: mcp-admin-server
+        image: ghcr.io/peterj/mcp-website-fetcher:main
+        imagePullPolicy: Always
+        env:
+        - name: MCP_SERVER_NAME
+          value: "admin-mcp-server"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-admin-server
+  labels:
+    app: mcp-admin-server
+spec:
+  selector:
+    app: mcp-admin-server
+  ports:
+  - port: 80
+    targetPort: 8000
+    appProtocol: kgateway.dev/mcp
+---
+# Admin MCP Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: admin-mcp-backend
+spec:
+  type: MCP
+  mcp:
+    targets:
+    - name: admin-target
+      static:
+        host: mcp-admin-server.default.svc.cluster.local
+        port: 80
+        protocol: SSE
