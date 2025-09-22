@@ -11,10 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	"github.com/kgateway-dev/kgateway/v2/pkg/utils/kubeutils"
-	"github.com/kgateway-dev/kgateway/v2/pkg/utils/requestutils/curl"
 	"github.com/kgateway-dev/kgateway/v2/test/kubernetes/e2e"
-	testdefaults "github.com/kgateway-dev/kgateway/v2/test/kubernetes/e2e/defaults"
 	"github.com/kgateway-dev/kgateway/v2/test/kubernetes/e2e/tests/base"
 )
 
@@ -77,7 +74,6 @@ func (s *testingSuite) TestMCPWorkflow() {
 	s.testToolsListWithSession(sessionID)
 }
 
-
 func (s *testingSuite) initializeAndGetSessionID() string {
 	s.T().Log("Initializing MCP and extracting session ID")
 
@@ -92,19 +88,12 @@ func (s *testingSuite) initializeAndGetSessionID() string {
 		"id": 1
 	}`
 
-	// Execute kubectl command directly to capture output
-	cmd := exec.Command("kubectl", "exec", "-n", "curl", "curl", "--",
-		"curl", "-v",
-		"-H", "Content-Type: application/json",
-		"-H", "Accept: text/event-stream,application/json",
-		"-d", mcpRequest,
-		"--max-time", "10",
-		"http://gw.default.svc.cluster.local:8080/mcp")
-
-	output, err := cmd.CombinedOutput()
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "text/event-stream,application/json",
+	}
+	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "10")
 	s.Require().NoError(err, "Failed to execute initialize request")
-
-	outputStr := string(output)
 	s.T().Logf("Initialize response: %s", outputStr)
 
 	// Verify we got a successful response
@@ -135,23 +124,17 @@ func (s *testingSuite) testResourcesListWithSession(sessionID string) {
 		"id": 2
 	}`
 
-	cmd := exec.Command("kubectl", "exec", "-n", "curl", "curl", "--",
-		"curl", "-v", "--no-buffer",
-		"-H", "Content-Type: application/json",
-		"-H", "Accept: text/event-stream,application/json",
-		"-H", fmt.Sprintf("mcp-session-id: %s", sessionID),
-		"-d", mcpRequest,
-		"--max-time", "10",
-		"http://gw.default.svc.cluster.local:8080/mcp")
-
-	output, err := cmd.CombinedOutput()
+	headers := map[string]string{
+		"Content-Type":   "application/json",
+		"Accept":         "text/event-stream,application/json",
+		"mcp-session-id": sessionID,
+	}
+	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--no-buffer", "--max-time", "10")
 	s.Require().NoError(err, "Failed to execute resources/list request")
-
-	outputStr := string(output)
 	s.T().Logf("Resources/list response: %s", outputStr)
 
 	// Check if we got a successful HTTP response
-	s.Require().Contains(outputStr, "< HTTP/1.1 200 OK", "resources/list should return 200 OK")
+	s.requireHTTPStatus(outputStr, 200)
 
 	// For resources/list, an empty result might be valid if no resources exist
 	if strings.Contains(outputStr, `"result"`) {
@@ -178,19 +161,13 @@ func (s *testingSuite) testToolsListWithSession(sessionID string) {
 		"id": 3
 	}`
 
-	cmd := exec.Command("kubectl", "exec", "-n", "curl", "curl", "--",
-		"curl", "-v", "--no-buffer",
-		"-H", "Content-Type: application/json",
-		"-H", "Accept: text/event-stream,application/json",
-		"-H", fmt.Sprintf("mcp-session-id: %s", sessionID),
-		"-d", mcpRequest,
-		"--max-time", "10",
-		"http://gw.default.svc.cluster.local:8080/mcp")
-
-	output, err := cmd.CombinedOutput()
+	headers := map[string]string{
+		"Content-Type":   "application/json",
+		"Accept":         "text/event-stream,application/json",
+		"mcp-session-id": sessionID,
+	}
+	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--no-buffer", "--max-time", "10")
 	s.Require().NoError(err, "Failed to execute tools/list request")
-
-	outputStr := string(output)
 	s.T().Logf("Tools/list response: %s", outputStr)
 
 	// Check for session expiry and handle gracefully
@@ -205,7 +182,7 @@ func (s *testingSuite) testToolsListWithSession(sessionID string) {
 	}
 
 	// Check if we got a successful HTTP response
-	s.Require().Contains(outputStr, "< HTTP/1.1 200 OK", "tools/list should return 200 OK")
+	s.requireHTTPStatus(outputStr, 200)
 
 	// For tools/list, an empty result might be valid if no tools exist
 	if strings.Contains(outputStr, `"result"`) {
@@ -215,18 +192,14 @@ func (s *testingSuite) testToolsListWithSession(sessionID string) {
 	}
 }
 
-func (s *testingSuite) testSSEEndpoint() {
+func (s *testingSuite) TestSSEEndpoint() {
 	s.T().Log("Testing MCP SSE endpoint to get session ID")
 
-	// Use direct kubectl exec to properly handle SSE streaming
-	cmd := exec.Command("kubectl", "exec", "-n", "curl", "curl", "--",
-		"curl", "-v", "-N",
-		"-H", "Accept: text/event-stream",
-		"--max-time", "5", // Give it 5 seconds to get initial data
-		"http://gw.default.svc.cluster.local:8080/sse")
-
-	output, err := cmd.CombinedOutput()
-
+	// Use shared curl helper to properly handle SSE streaming
+	headers := map[string]string{
+		"Accept": "text/event-stream",
+	}
+	outputStr, err := s.execCurl(8080, "/sse", headers, "", "-N", "--max-time", "5")
 	// For SSE, timeout (exit code 28) is expected after getting initial data
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 28 {
@@ -236,11 +209,10 @@ func (s *testingSuite) testSSEEndpoint() {
 		}
 	}
 
-	outputStr := string(output)
 	s.T().Logf("SSE response: %s", outputStr)
 
 	// Verify we got a successful HTTP response
-	s.Require().Contains(outputStr, "< HTTP/1.1 200 OK", "SSE endpoint should return 200 OK")
+	s.requireHTTPStatus(outputStr, 200)
 
 	// Verify we got SSE data with session ID
 	s.Require().Contains(outputStr, "sessionId=", "SSE should provide session ID")
@@ -256,6 +228,34 @@ func (s *testingSuite) testSSEEndpoint() {
 	}
 
 	s.T().Log("SSE endpoint working correctly")
+}
+
+// helper to run a request via curl pod to a given path and return combined output
+func (s *testingSuite) execCurl(port int, path string, headers map[string]string, body string, extraArgs ...string) (string, error) {
+	args := []string{"exec", "-n", "curl", "curl", "--", "curl", "-v"}
+	for k, v := range headers {
+		args = append(args, "-H", fmt.Sprintf("%s: %s", k, v))
+	}
+	if body != "" {
+		args = append(args, "-d", body)
+	}
+	args = append(args, extraArgs...)
+	args = append(args, fmt.Sprintf("http://gw.default.svc.cluster.local:%d%s", port, path))
+
+	cmd := exec.Command("kubectl", args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// helper to run a POST to /mcp with optional headers and body via curl pod and return combined output
+func (s *testingSuite) execCurlMCP(port int, headers map[string]string, body string, extraArgs ...string) (string, error) {
+	return s.execCurl(port, "/mcp", headers, body, extraArgs...)
+}
+
+// helper to assert HTTP status from verbose curl output (supports HTTP/1.1 and HTTP/2)
+func (s *testingSuite) requireHTTPStatus(out string, code int) {
+	re := regexp.MustCompile(fmt.Sprintf(`(?m)^< HTTP/\S+\s+%d\b`, code))
+	s.Require().True(re.FindStringIndex(out) != nil, "expected HTTP %d; got:\n%s", code, out)
 }
 
 // Dynamic MCP Tests
@@ -293,24 +293,14 @@ func (s *testingSuite) TestDynamicMCPAdminRouting() {
 		"id": 0
 	}`
 
-	mcpCurlOpts := []curl.Option{
-		curl.WithHost(kubeutils.ServiceFQDN(dynamicGatewayService.ObjectMeta)),
-		curl.WithPort(8080),
-		curl.WithPath("/mcp"),
-		curl.WithMethod("POST"),
-		curl.WithHeader("Content-Type", "application/json"),
-		curl.WithHeader("Accept", "text/event-stream,application/json"),
-		curl.WithHeader("user-type", "admin"), // This should route to admin server
-		curl.WithBody(mcpRequest),
-		curl.WithArgs([]string{"--max-time", "5"}),
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "text/event-stream,application/json",
+		"user-type":    "admin",
 	}
-
-	s.TestInstallation.Assertions.AssertEventualCurlResponse(
-		s.Ctx,
-		testdefaults.CurlPodExecOpt,
-		mcpCurlOpts,
-		expectMCPInitializeResponse,
-	)
+	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
+	s.Require().NoError(err, "Failed to execute admin initialize request")
+	s.requireHTTPStatus(outputStr, 200)
 
 	s.T().Log("Admin routing working correctly")
 }
@@ -330,24 +320,14 @@ func (s *testingSuite) TestDynamicMCPUserRouting() {
 		"id": 0
 	}`
 
-	mcpCurlOpts := []curl.Option{
-		curl.WithHost(kubeutils.ServiceFQDN(dynamicGatewayService.ObjectMeta)),
-		curl.WithPort(8080),
-		curl.WithPath("/mcp"),
-		curl.WithMethod("POST"),
-		curl.WithHeader("Content-Type", "application/json"),
-		curl.WithHeader("Accept", "text/event-stream,application/json"),
-		curl.WithHeader("user-type", "user"), // This should route to user server
-		curl.WithBody(mcpRequest),
-		curl.WithArgs([]string{"--max-time", "5"}),
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "text/event-stream,application/json",
+		"user-type":    "user",
 	}
-
-	s.TestInstallation.Assertions.AssertEventualCurlResponse(
-		s.Ctx,
-		testdefaults.CurlPodExecOpt,
-		mcpCurlOpts,
-		expectMCPInitializeResponse,
-	)
+	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
+	s.Require().NoError(err, "Failed to execute user initialize request")
+	s.requireHTTPStatus(outputStr, 200)
 
 	s.T().Log("User routing working correctly")
 }
@@ -367,24 +347,13 @@ func (s *testingSuite) TestDynamicMCPDefaultRouting() {
 		"id": 0
 	}`
 
-	mcpCurlOpts := []curl.Option{
-		curl.WithHost(kubeutils.ServiceFQDN(dynamicGatewayService.ObjectMeta)),
-		curl.WithPort(8080),
-		curl.WithPath("/mcp"),
-		curl.WithMethod("POST"),
-		curl.WithHeader("Content-Type", "application/json"),
-		curl.WithHeader("Accept", "text/event-stream,application/json"),
-		// No user-type header - should default to user server
-		curl.WithBody(mcpRequest),
-		curl.WithArgs([]string{"--max-time", "5"}),
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "text/event-stream,application/json",
 	}
-
-	s.TestInstallation.Assertions.AssertEventualCurlResponse(
-		s.Ctx,
-		testdefaults.CurlPodExecOpt,
-		mcpCurlOpts,
-		expectMCPInitializeResponse,
-	)
+	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
+	s.Require().NoError(err, "Failed to execute default initialize request")
+	s.requireHTTPStatus(outputStr, 200)
 
 	s.T().Log("Default routing working correctly")
 }

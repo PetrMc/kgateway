@@ -26,7 +26,6 @@ var (
 		Name:      "gw",
 		Namespace: "default",
 	}
-	gatewayService = &corev1.Service{ObjectMeta: gatewayObjectMeta}
 
 	dynamicGatewayObjectMeta = metav1.ObjectMeta{
 		Name:      "gw",
@@ -34,29 +33,9 @@ var (
 	}
 	dynamicGatewayService = &corev1.Service{ObjectMeta: dynamicGatewayObjectMeta}
 
-	expectStatus200Success = &testmatchers.HttpResponse{
-		StatusCode: http.StatusOK,
-		Body:       nil,
-	}
-
-	expectMCPSessionResponse = &testmatchers.HttpResponse{
-		StatusCode: http.StatusOK,
-		Body:       ContainSubstring("sessionId="),
-	}
-
 	expectMCPInitializeResponse = &testmatchers.HttpResponse{
 		StatusCode: http.StatusOK,
 		Body:       And(ContainSubstring("result"), ContainSubstring("protocolVersion")),
-	}
-
-	expectMCPResourcesResponse = &testmatchers.HttpResponse{
-		StatusCode: http.StatusOK,
-		Body:       And(ContainSubstring("result"), ContainSubstring("resources")),
-	}
-
-	expectMCPToolsResponse = &testmatchers.HttpResponse{
-		StatusCode: http.StatusOK,
-		Body:       And(ContainSubstring("result"), ContainSubstring("tools")),
 	}
 
 	// Base test setup - common resources + curl pod
@@ -73,4 +52,6 @@ var (
 	staticSetup = base.TestCase{
 		Manifests: []string{staticSetupManifest},
 	}
+
+	expectHTTP200 = &testmatchers.HttpResponse{StatusCode: http.StatusOK}
 )
