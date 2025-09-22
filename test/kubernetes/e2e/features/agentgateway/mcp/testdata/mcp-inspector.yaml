@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-inspector-config
+data:
+  mcp.json: |
+    {
+      "mcpServers": {
+        "default-server": {
+          "type": "streamable-http",
+          "url": "http://gw.default.svc.cluster.local:8080/mcp"
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-inspector
+  labels: {app: mcp-inspector}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-inspector}
+  template:
+    metadata:
+      labels: {app: mcp-inspector}
+    spec:
+      containers:
+      - name: inspector
+        image: ghcr.io/modelcontextprotocol/inspector:latest
+        args: ["--config", "/config/mcp.json"]
+        env:
+          - name: HOST
+            value: "0.0.0.0"              # allow Service/port-forward to reach it
+          - name: MCP_AUTO_OPEN_ENABLED
+            value: "false"                # no browser
+          - name: DANGEROUSLY_OMIT_AUTH
+            value: "true"                 # <-- no Bearer token required on :6277
+          # (Optional) relax Origin checks for curl; UI stays unused
+          - name: ALLOWED_ORIGINS
+            value: "http://localhost:6274"
+        ports:
+          - containerPort: 6274           # UI (unused but harmless)
+          - containerPort: 6277           # PROXY (your curl target)
+        securityContext:
+          runAsNonRoot: false             # image runs as root; allow it
+          allowPrivilegeEscalation: false
+        volumeMounts:
+          - name: cfg
+            mountPath: /config
+            readOnly: true
+      volumes:
+        - name: cfg
+          configMap:
+            name: mcp-inspector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-inspector
+  labels: {app: mcp-inspector}
+spec:
+  type: ClusterIP
+  selector: {app: mcp-inspector}
+  ports:
+    - name: ui
+      port: 6274
+      targetPort: 6274
+    - name: proxy
+      port: 6277
+      targetPort: 6277

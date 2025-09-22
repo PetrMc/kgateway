@@ -13,8 +13,6 @@ spec:
         port: 80
         protocol: SSE
 ---
-## Gateway provided in common.yaml
----
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

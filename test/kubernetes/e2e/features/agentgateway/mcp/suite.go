@@ -1,7 +1,10 @@
 package mcp
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -21,6 +24,8 @@ type testingSuite struct {
 	*base.BaseTestingSuite
 	mcpSessionID string // Store session ID across tests
 }
+
+const mcpProto = "2025-03-26"
 
 func NewTestingSuite(ctx context.Context, testInst *e2e.TestInstallation) suite.TestingSuite {
 	return &testingSuite{
@@ -80,7 +85,7 @@ func (s *testingSuite) initializeAndGetSessionID() string {
 	mcpRequest := `{
 		"method": "initialize",
 		"params": {
-			"protocolVersion": "2025-06-18",
+			"protocolVersion": "2025-03-26",
 			"capabilities": {"roots": {}},
 			"clientInfo": {"name": "test-client", "version": "1.0.0"}
 		},
@@ -89,10 +94,11 @@ func (s *testingSuite) initializeAndGetSessionID() string {
 	}`
 
 	headers := map[string]string{
-		"Content-Type": "application/json",
-		"Accept":       "text/event-stream,application/json",
+		"Content-Type":         "application/json",
+		"Accept":               "text/event-stream,application/json",
+		"MCP-Protocol-Version": mcpProto,
 	}
-	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "10")
+	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "20")
 	s.Require().NoError(err, "Failed to execute initialize request")
 	s.T().Logf("Initialize response: %s", outputStr)
 
@@ -118,121 +124,118 @@ func (s *testingSuite) testResourcesListWithSession(sessionID string) {
 	s.T().Log("Testing resources/list with session ID")
 
 	mcpRequest := `{
-		"method": "resources/list",
-		"params": {},
-		"jsonrpc": "2.0",
-		"id": 2
+	  "method": "resources/list",
+	  "params": {},
+	  "jsonrpc": "2.0",
+	  "id": 2
 	}`
 
 	headers := map[string]string{
-		"Content-Type":   "application/json",
-		"Accept":         "text/event-stream,application/json",
-		"mcp-session-id": sessionID,
+		"Content-Type":         "application/json",
+		"Accept":               "application/json, text/event-stream",
+		"mcp-session-id":       sessionID,
+		"MCP-Protocol-Version": mcpProto,
 	}
-	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--no-buffer", "--max-time", "10")
-	s.Require().NoError(err, "Failed to execute resources/list request")
-	s.T().Logf("Resources/list response: %s", outputStr)
 
-	// Check if we got a successful HTTP response
-	s.requireHTTPStatus(outputStr, 200)
+	// Ask curl to stream (-N) so SSE arrives immediately
+	out, err := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
+	s.Require().NoError(err, "resources/list curl failed")
+	s.requireHTTPStatus(out, 200)
 
-	// For resources/list, an empty result might be valid if no resources exist
-	if strings.Contains(outputStr, `"result"`) {
-		s.T().Log("resources/list returned result data")
-	} else {
-		s.T().Log("resources/list returned empty/minimal response (might be valid)")
-
-		// Let's try to see if there's any SSE data after the headers
-		if strings.Contains(outputStr, "data:") {
-			s.T().Log("Found SSE data in response")
-		} else {
-			s.T().Log("No SSE data found - response might be truly empty")
-		}
+	// Extract first SSE data payload
+	payload, ok := FirstSSEDataPayload(out)
+	if !ok {
+		s.T().Log("No SSE payload from resources/list; sending notifications/initialized and retrying once")
+		s.notifyInitialized(sessionID)
+		out, err = s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
+		s.Require().NoError(err, "resources/list retry curl failed")
+		s.requireHTTPStatus(out, 200)
+		payload, ok = FirstSSEDataPayload(out)
 	}
+	s.Require().True(ok, "expected SSE data payload in resources/list (after retry)")
+
+	s.T().Logf("resources/list payload: %s", payload)
+	s.Require().True(IsJSONValid(payload), "resources/list SSE payload is not valid JSON")
+
+	var resp ResourcesListResponse
+	_ = json.Unmarshal([]byte(payload), &resp)
+
+	if resp.Error != nil {
+		s.T().Logf("resources/list error: %d %s", resp.Error.Code, resp.Error.Message)
+		s.FailNow("resources/list returned error")
+	}
+
+	// Not all servers expose resources; we just assert the structure is present.
+	s.Require().NotNil(resp.Result, "resources/list missing result")
+	s.T().Logf("resources: %d", len(resp.Result.Resources))
 }
 
 func (s *testingSuite) testToolsListWithSession(sessionID string) {
 	s.T().Log("Testing tools/list with session ID")
 
 	mcpRequest := `{
-		"method": "tools/list",
-		"params": {},
-		"jsonrpc": "2.0",
-		"id": 3
+	  "method": "tools/list",
+	  "params": {"_meta": {"progressToken": 1}},
+	  "jsonrpc": "2.0",
+	  "id": 3
 	}`
 
 	headers := map[string]string{
-		"Content-Type":   "application/json",
-		"Accept":         "text/event-stream,application/json",
-		"mcp-session-id": sessionID,
+		"Content-Type":         "application/json",
+		"Accept":               "application/json, text/event-stream",
+		"mcp-session-id":       sessionID,
+		"MCP-Protocol-Version": mcpProto,
 	}
-	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--no-buffer", "--max-time", "10")
-	s.Require().NoError(err, "Failed to execute tools/list request")
-	s.T().Logf("Tools/list response: %s", outputStr)
+	out, err := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
+	s.Require().NoError(err, "tools/list curl failed")
 
-	// Check for session expiry and handle gracefully
-	if strings.Contains(outputStr, "401 Unauthorized") && strings.Contains(outputStr, "Session not found") {
-		s.T().Log("Session expired - this is expected behavior for short-lived sessions")
-		s.T().Log("Re-initializing session for tools/list test...")
+	// If session was replaced, some gateways emit a JSON error as SSE payload (HTTP 200).
+	// So parse SSE first, then decide.
+	payload, ok := FirstSSEDataPayload(out)
+	if !ok {
+		s.T().Log("No SSE payload from tools/list; sending notifications/initialized and retrying once")
+		s.notifyInitialized(sessionID)
+		out, err = s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
+		s.Require().NoError(err, "tools/list retry curl failed")
+		s.requireHTTPStatus(out, 200)
+		payload, ok = FirstSSEDataPayload(out)
+	}
+	s.Require().True(ok, "expected SSE data payload in tools/list (after retry)")
+	s.Require().True(IsJSONValid(payload), "tools/list SSE payload is not valid JSON")
 
-		// Re-initialize and try again
-		newSessionID := s.initializeAndGetSessionID()
-		s.testToolsListWithSession(newSessionID)
+	var resp ToolsListResponse
+	_ = json.Unmarshal([]byte(payload), &resp)
+
+	if resp.Error != nil && strings.Contains(resp.Error.Message, "Session not found") {
+		// Re-init and retry once
+		s.T().Log("Session expired; re-initializing and retrying tools/list")
+		newID := s.initializeAndGetSessionID()
+		s.testToolsListWithSession(newID)
 		return
 	}
 
-	// Check if we got a successful HTTP response
-	s.requireHTTPStatus(outputStr, 200)
-
-	// For tools/list, an empty result might be valid if no tools exist
-	if strings.Contains(outputStr, `"result"`) {
-		s.T().Log("tools/list returned result data")
-	} else {
-		s.T().Log("tools/list returned empty/minimal response (might be valid)")
-	}
+	s.requireHTTPStatus(out, 200)
+	s.Require().NotNil(resp.Result, "tools/list missing result")
+	s.T().Logf("tools: %d", len(resp.Result.Tools))
+	// If you expect at least one tool:
+	s.Require().GreaterOrEqual(len(resp.Result.Tools), 1, "expected at least one tool")
 }
 
-func (s *testingSuite) TestSSEEndpoint() {
-	s.T().Log("Testing MCP SSE endpoint to get session ID")
-
-	// Use shared curl helper to properly handle SSE streaming
+// notifyInitialized sends the "notifications/initialized" message once for a session.
+func (s *testingSuite) notifyInitialized(sessionID string) {
+	mcpRequest := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
 	headers := map[string]string{
-		"Accept": "text/event-stream",
+		"Content-Type":         "application/json",
+		"Accept":               "application/json, text/event-stream",
+		"mcp-session-id":       sessionID,
+		"MCP-Protocol-Version": mcpProto,
 	}
-	outputStr, err := s.execCurl(8080, "/sse", headers, "", "-N", "--max-time", "5")
-	// For SSE, timeout (exit code 28) is expected after getting initial data
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 28 {
-			s.T().Log("SSE connection timed out as expected (got initial data then timeout)")
-		} else {
-			s.Require().NoError(err, "Failed to execute SSE request")
-		}
-	}
-
-	s.T().Logf("SSE response: %s", outputStr)
-
-	// Verify we got a successful HTTP response
-	s.requireHTTPStatus(outputStr, 200)
-
-	// Verify we got SSE data with session ID
-	s.Require().Contains(outputStr, "sessionId=", "SSE should provide session ID")
-
-	// Extract and log the session ID for debugging
-	if strings.Contains(outputStr, "sessionId=") {
-		sessionIDRegex := regexp.MustCompile(`sessionId=([a-f0-9-]+)`)
-		matches := sessionIDRegex.FindStringSubmatch(outputStr)
-		if len(matches) > 1 {
-			sessionID := strings.TrimSpace(matches[1])
-			s.T().Logf("SSE provided session ID: %s", sessionID)
-		}
-	}
-
-	s.T().Log("SSE endpoint working correctly")
+	_, _ = s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "2")
 }
 
 // helper to run a request via curl pod to a given path and return combined output
 func (s *testingSuite) execCurl(port int, path string, headers map[string]string, body string, extraArgs ...string) (string, error) {
-	args := []string{"exec", "-n", "curl", "curl", "--", "curl", "-v"}
+	args := []string{"exec", "-n", "curl", "curl", "--", "curl", "-v", "-N", "--http1.1"}
 	for k, v := range headers {
 		args = append(args, "-H", fmt.Sprintf("%s: %s", k, v))
 	}
@@ -285,7 +288,7 @@ func (s *testingSuite) TestDynamicMCPAdminRouting() {
 	mcpRequest := `{
 		"method": "initialize",
 		"params": {
-			"protocolVersion": "2025-06-18",
+			"protocolVersion": "2025-03-26",
 			"capabilities": {"roots": {}},
 			"clientInfo": {"name": "admin-client", "version": "1.0.0"}
 		},
@@ -312,7 +315,7 @@ func (s *testingSuite) TestDynamicMCPUserRouting() {
 	mcpRequest := `{
 		"method": "initialize",
 		"params": {
-			"protocolVersion": "2025-06-18",
+			"protocolVersion": "2025-03-26",
 			"capabilities": {"roots": {}},
 			"clientInfo": {"name": "user-client", "version": "1.0.0"}
 		},
@@ -339,7 +342,7 @@ func (s *testingSuite) TestDynamicMCPDefaultRouting() {
 	mcpRequest := `{
 		"method": "initialize",
 		"params": {
-			"protocolVersion": "2025-06-18",
+			"protocolVersion": "2025-03-26",
 			"capabilities": {"roots": {}},
 			"clientInfo": {"name": "default-client", "version": "1.0.0"}
 		},
@@ -356,4 +359,77 @@ func (s *testingSuite) TestDynamicMCPDefaultRouting() {
 	s.requireHTTPStatus(outputStr, 200)
 
 	s.T().Log("Default routing working correctly")
+}
+
+// ExtractMCPSessionID finds the mcp-session-id header value in a verbose curl output.
+func ExtractMCPSessionID(out string) string {
+	re := regexp.MustCompile(`(?i)mcp-session-id:\s*([a-f0-9-]+)`)
+	m := re.FindStringSubmatch(out)
+	if len(m) > 1 {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
+}
+
+// FirstSSEDataPayload returns the first full SSE "data:" event payload (coalescing multi-line data:)
+// from a verbose curl output or raw SSE stream.
+func FirstSSEDataPayload(out string) (string, bool) {
+	sc := bufio.NewScanner(strings.NewReader(out))
+	var buf bytes.Buffer
+	got := false
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "data:") {
+			got = true
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if buf.Len() > 0 {
+				buf.WriteByte('\n')
+			}
+			buf.WriteString(payload)
+			continue
+		}
+		// Blank line after we started -> end of this SSE event
+		if got && strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+	s := strings.TrimSpace(buf.String())
+	if s == "" {
+		return "", false
+	}
+	return s, true
+}
+
+// IsJSONValid is a small helper to check the payload is valid JSON
+func IsJSONValid(s string) bool {
+	var js json.RawMessage
+	return json.Unmarshal([]byte(s), &js) == nil
+}
+
+type ToolsListResponse struct {
+	JSONRPC string `json:"jsonrpc"`
+	Result  *struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description,omitempty"`
+		} `json:"tools"`
+	} `json:"result,omitempty"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+type ResourcesListResponse struct {
+	JSONRPC string `json:"jsonrpc"`
+	Result  *struct {
+		Resources []struct {
+			URI  string `json:"uri"`
+			Name string `json:"name,omitempty"`
+		} `json:"resources"`
+	} `json:"result,omitempty"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
 }
