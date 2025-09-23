@@ -29,6 +29,82 @@ type testingSuite struct {
 
 const mcpProto = "2025-03-26"
 
+// ----- Request builders (avoid repeated inline JSON strings) -----
+func buildInitializeRequest(clientName string, id int) string {
+	return fmt.Sprintf(`{
+		"method": "initialize",
+		"params": {
+			"protocolVersion": "%s",
+			"capabilities": {"roots": {}},
+			"clientInfo": {"name": "%s", "version": "1.0.0"}
+		},
+		"jsonrpc": "2.0",
+		"id": %d
+	}`, mcpProto, clientName, id)
+}
+
+func buildToolsListRequest(id int) string {
+	return fmt.Sprintf(`{
+	  "method": "tools/list",
+	  "params": {"_meta": {"progressToken": 1}},
+	  "jsonrpc": "2.0",
+	  "id": %d
+	}`, id)
+}
+
+func buildResourcesListRequest(id int) string {
+	return fmt.Sprintf(`{
+	  "method": "resources/list",
+	  "params": {"_meta": {"progressToken": 1}},
+	  "jsonrpc": "2.0",
+	  "id": %d
+	}`, id)
+}
+
+func buildNotifyInitializedRequest() string {
+	return `{"jsonrpc":"2.0","method":"notifications/initialized"}`
+}
+
+// newMCPHeaders returns a base set of headers for MCP requests with the provided Accept value.
+// Always includes Content-Type and MCP-Protocol-Version.
+func newMCPHeaders(accept string) map[string]string {
+	if accept == "" {
+		accept = "application/json, text/event-stream"
+	}
+	return map[string]string{
+		"Content-Type":         "application/json",
+		"Accept":               accept,
+		"MCP-Protocol-Version": mcpProto,
+	}
+}
+
+// withSessionID returns a copy of headers including mcp-session-id.
+func withSessionID(headers map[string]string, sessionID string) map[string]string {
+	cp := make(map[string]string, len(headers)+1)
+	for k, v := range headers {
+		cp[k] = v
+	}
+	if sessionID != "" {
+		cp["mcp-session-id"] = sessionID
+	}
+	return cp
+}
+
+// withRouteHeaders merges route-specific headers (like user-type) into a copy.
+func withRouteHeaders(headers map[string]string, extras map[string]string) map[string]string {
+	if len(extras) == 0 {
+		return headers
+	}
+	cp := make(map[string]string, len(headers)+len(extras))
+	for k, v := range headers {
+		cp[k] = v
+	}
+	for k, v := range extras {
+		cp[k] = v
+	}
+	return cp
+}
+
 // debugEnabled returns true if E2E_DEBUG env var is set to "1"/"true"/"yes".
 func debugEnabled() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("E2E_DEBUG")))
@@ -112,22 +188,9 @@ func (s *testingSuite) TestSSEEndpoint() {
 	s.TestInstallation.Assertions.EventuallyHTTPRouteCondition(s.Ctx, "mcp-route", "default", gwv1.RouteConditionAccepted, metav1.ConditionTrue)
 
 	// Send initialize expecting SSE
-	initBody := `{
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {"roots": {}},
-            "clientInfo": {"name": "sse-client", "version": "1.0.0"}
-        },
-        "jsonrpc": "2.0",
-        "id": 0
-    }`
+	initBody := buildInitializeRequest("sse-client", 0)
 
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "text/event-stream,application/json",
-		"MCP-Protocol-Version": mcpProto,
-	}
+	headers := newMCPHeaders("text/event-stream,application/json")
 	out, err := s.execCurlMCP(8080, headers, initBody, "-N", "--max-time", "8")
 	s.Require().NoError(err, "SSE initialize curl failed")
 
@@ -159,22 +222,9 @@ func (s *testingSuite) TestSSEEndpoint() {
 func (s *testingSuite) initializeAndGetSessionID() string {
 	s.T().Log("Initializing MCP and extracting session ID")
 
-	mcpRequest := `{
-		"method": "initialize",
-		"params": {
-			"protocolVersion": "2025-03-26",
-			"capabilities": {"roots": {}},
-			"clientInfo": {"name": "test-client", "version": "1.0.0"}
-		},
-		"jsonrpc": "2.0",
-		"id": 1
-	}`
+	mcpRequest := buildInitializeRequest("test-client", 1)
 
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "application/json, text/event-stream",
-		"MCP-Protocol-Version": mcpProto,
-	}
+	headers := newMCPHeaders("application/json, text/event-stream")
 	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "20")
 	s.Require().NoError(err, "Failed to execute initialize request")
 	s.T().Logf("Initialize response: %s", outputStr)
@@ -201,19 +251,9 @@ func (s *testingSuite) initializeAndGetSessionID() string {
 func (s *testingSuite) testResourcesListWithSession(sessionID string) {
 	s.T().Log("Testing resources/list with session ID")
 
-	mcpRequest := `{
-		      "method": "resources/list",
-		      "params": { "_meta": { "progressToken": 1 } },
-		      "jsonrpc": "2.0",
-		      "id": 2
-		    }`
+	mcpRequest := buildResourcesListRequest(2)
 
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "application/json, text/event-stream",
-		"mcp-session-id":       sessionID,
-		"MCP-Protocol-Version": mcpProto,
-	}
+	headers := withSessionID(newMCPHeaders("application/json, text/event-stream"), sessionID)
 
 	// Ask curl to stream (-N) so SSE arrives immediately
 	out, err := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
@@ -258,19 +298,9 @@ func (s *testingSuite) testResourcesListWithSession(sessionID string) {
 func (s *testingSuite) testToolsListWithSession(sessionID string) {
 	s.T().Log("Testing tools/list with session ID")
 
-	mcpRequest := `{
-	  "method": "tools/list",
-      "params": {"_meta": {"progressToken": 1}},
-	  "jsonrpc": "2.0",
-	  "id": 3
-	}`
+	mcpRequest := buildToolsListRequest(3)
 
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "application/json, text/event-stream",
-		"mcp-session-id":       sessionID,
-		"MCP-Protocol-Version": mcpProto,
-	}
+	headers := withSessionID(newMCPHeaders("application/json, text/event-stream"), sessionID)
 	out, err := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
 	s.Require().NoError(err, "tools/list curl failed")
 
@@ -308,13 +338,8 @@ func (s *testingSuite) testToolsListWithSession(sessionID string) {
 
 // notifyInitialized sends the "notifications/initialized" message once for a session.
 func (s *testingSuite) notifyInitialized(sessionID string) {
-	mcpRequest := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "application/json, text/event-stream",
-		"mcp-session-id":       sessionID,
-		"MCP-Protocol-Version": mcpProto,
-	}
+	mcpRequest := buildNotifyInitializedRequest()
+	headers := withSessionID(newMCPHeaders("application/json, text/event-stream"), sessionID)
 	// We don't care about the body; just make sure it doesn't 401.
 	out, _ := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "2")
 	if strings.Contains(out, "401 Unauthorized") {
@@ -374,7 +399,8 @@ func (s *testingSuite) execCurlMCP(port int, headers map[string]string, body str
 
 // helper to assert HTTP status from verbose curl output (supports HTTP/1.1 and HTTP/2)
 func (s *testingSuite) requireHTTPStatus(out string, code int) {
-	re := regexp.MustCompile(fmt.Sprintf(`(?m)^< HTTP/\S+\s+%d\b`, code))
+	// Match lines like "< HTTP/1.1 200" or "HTTP/1.1 200" (some logs omit the '<')
+	re := regexp.MustCompile(fmt.Sprintf(`(?m)^(?:<\s*)?HTTP/\S+\s+%d\b`, code))
 	if re.FindStringIndex(out) == nil {
 		// Always log the body on mismatch to make failures actionable.
 		s.logCurl(fmt.Sprintf("HTTP status mismatch (wanted %d)", code), out)
@@ -410,23 +436,9 @@ func (s *testingSuite) TestDynamicMCPAdminRouting() {
 	s.T().Log("Testing dynamic MCP routing for admin user")
 
 	// MCP initialize request with admin header
-	mcpRequest := `{
-		"method": "initialize",
-		"params": {
-			"protocolVersion": "2025-03-26",
-			"capabilities": {"roots": {}},
-			"clientInfo": {"name": "admin-client", "version": "1.0.0"}
-		},
-		"jsonrpc": "2.0",
-		"id": 0
-	}`
+	mcpRequest := buildInitializeRequest("admin-client", 0)
 
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "text/event-stream,application/json",
-		"MCP-Protocol-Version": mcpProto,
-		"user-type":            "admin",
-	}
+	headers := withRouteHeaders(newMCPHeaders("text/event-stream,application/json"), map[string]string{"user-type": "admin"})
 	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
 	s.Require().NoError(err, "Failed to execute admin initialize request")
 	s.requireHTTPStatus(outputStr, 200)
@@ -459,23 +471,9 @@ func (s *testingSuite) TestDynamicMCPUserRouting() {
 	s.T().Log("Testing dynamic MCP routing for regular user")
 
 	// MCP initialize request with user header
-	mcpRequest := `{
-		"method": "initialize",
-		"params": {
-			"protocolVersion": "2025-03-26",
-			"capabilities": {"roots": {}},
-			"clientInfo": {"name": "user-client", "version": "1.0.0"}
-		},
-		"jsonrpc": "2.0",
-		"id": 0
-	}`
+	mcpRequest := buildInitializeRequest("user-client", 0)
 
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "text/event-stream,application/json",
-		"MCP-Protocol-Version": mcpProto,
-		"user-type":            "user",
-	}
+	headers := withRouteHeaders(newMCPHeaders("text/event-stream,application/json"), map[string]string{"user-type": "user"})
 	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
 	s.Require().NoError(err, "Failed to execute user initialize request")
 	s.requireHTTPStatus(outputStr, 200)
@@ -507,22 +505,9 @@ func (s *testingSuite) TestDynamicMCPDefaultRouting() {
 	s.T().Log("Testing dynamic MCP routing with no header (default to user)")
 
 	// MCP initialize request with no user-type header
-	mcpRequest := `{
-		"method": "initialize",
-		"params": {
-			"protocolVersion": "2025-03-26",
-			"capabilities": {"roots": {}},
-			"clientInfo": {"name": "default-client", "version": "1.0.0"}
-		},
-		"jsonrpc": "2.0",
-		"id": 0
-	}`
+	mcpRequest := buildInitializeRequest("default-client", 0)
 
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "text/event-stream,application/json",
-		"MCP-Protocol-Version": mcpProto,
-	}
+	headers := newMCPHeaders("text/event-stream,application/json")
 	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
 	s.Require().NoError(err, "Failed to execute default initialize request")
 	s.requireHTTPStatus(outputStr, 200)
@@ -648,21 +633,8 @@ type InitializeResponse struct {
 // Pass routeHeaders (e.g., map[string]string{"user-type":"admin"}) so the gateway
 // picks the same backend as the initialize call.
 func (s *testingSuite) mustListTools(sessionID, label string, routeHeaders map[string]string) []string {
-	mcpRequest := `{
-	  "method": "tools/list",
-	  "params": {"_meta": {"progressToken": 1}},
-	  "jsonrpc": "2.0",
-	  "id": 999
-	}`
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "application/json, text/event-stream",
-		"MCP-Protocol-Version": mcpProto,
-		"mcp-session-id":       sessionID,
-	}
-	for k, v := range routeHeaders {
-		headers[k] = v
-	}
+	mcpRequest := buildToolsListRequest(999)
+	headers := withRouteHeaders(withSessionID(newMCPHeaders("application/json, text/event-stream"), sessionID), routeHeaders)
 	out, err := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
 	s.Require().NoError(err, "%s curl failed", label)
 	s.requireHTTPStatus(out, 200)
@@ -700,16 +672,8 @@ func (s *testingSuite) mustListTools(sessionID, label string, routeHeaders map[s
 }
 
 func (s *testingSuite) notifyInitializedWithHeaders(sessionID string, routeHeaders map[string]string) {
-	mcpRequest := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
-	headers := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "application/json, text/event-stream",
-		"MCP-Protocol-Version": mcpProto,
-		"mcp-session-id":       sessionID,
-	}
-	for k, v := range routeHeaders {
-		headers[k] = v // carry user-type
-	}
+	mcpRequest := buildNotifyInitializedRequest()
+	headers := withRouteHeaders(withSessionID(newMCPHeaders("application/json, text/event-stream"), sessionID), routeHeaders)
 	_, _ = s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "5")
 	// Allow the gateway to register the session before the first RPC.
 	time.Sleep(75 * time.Millisecond)
@@ -723,24 +687,10 @@ func (s *testingSuite) TestDynamicMCPAdminVsUserTools() {
 
 	s.T().Log("Comparing admin vs user tool sets on dynamic MCP route")
 
-	initBody := `{
-		"method": "initialize",
-		"params": {
-			"protocolVersion": "2025-03-26",
-			"capabilities": {"roots": {}},
-			"clientInfo": {"name": "compare-client", "version": "1.0.0"}
-		},
-		"jsonrpc": "2.0",
-		"id": 0
-	}`
+	initBody := buildInitializeRequest("compare-client", 0)
 
 	// Admin session
-	adminHdr := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "text/event-stream,application/json",
-		"MCP-Protocol-Version": mcpProto,
-		"user-type":            "admin",
-	}
+	adminHdr := withRouteHeaders(newMCPHeaders("text/event-stream,application/json"), map[string]string{"user-type": "admin"})
 	adminOut, err := s.execCurlMCP(8080, adminHdr, initBody, "--max-time", "5")
 	s.Require().NoError(err, "admin initialize failed")
 	s.requireHTTPStatus(adminOut, 200)
@@ -750,12 +700,7 @@ func (s *testingSuite) TestDynamicMCPAdminVsUserTools() {
 	adminTools := s.mustListTools(adminSID, "admin tools/list (compare)", map[string]string{"user-type": "admin"})
 
 	// User session
-	userHdr := map[string]string{
-		"Content-Type":         "application/json",
-		"Accept":               "text/event-stream,application/json",
-		"MCP-Protocol-Version": mcpProto,
-		"user-type":            "user",
-	}
+	userHdr := withRouteHeaders(newMCPHeaders("text/event-stream,application/json"), map[string]string{"user-type": "user"})
 	userOut, err := s.execCurlMCP(8080, userHdr, initBody, "--max-time", "5")
 	s.Require().NoError(err, "user initialize failed")
 	s.requireHTTPStatus(userOut, 200)
