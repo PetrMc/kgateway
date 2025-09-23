@@ -77,10 +77,12 @@ func withRouteHeaders(headers map[string]string, extras map[string]string) map[s
 }
 
 func (s *testingSuite) initializeAndGetSessionID() string {
-	// Delegate to initializeSession to avoid duplicate parsing logic
+	// Delegate to initializeSession, then warm the session to avoid races
 	initBody := buildInitializeRequest("test-client", 1)
 	headers := mcpHeaders()
-	return s.initializeSession(initBody, headers, "workflow")
+	sid := s.initializeSession(initBody, headers, "workflow")
+	s.notifyInitialized(sid)
+	return sid
 }
 
 func (s *testingSuite) testToolsListWithSession(sessionID string) {
@@ -91,6 +93,8 @@ func (s *testingSuite) testToolsListWithSession(sessionID string) {
 	headers := withSessionID(mcpHeaders(), sessionID)
 	out, err := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
 	s.Require().NoError(err, "tools/list curl failed")
+
+	// Session is warmed during initialize; 401 retry no longer needed here.
 
 	// If session was replaced, some gateways emit a JSON error as SSE payload (HTTP 200).
 	// So parse SSE first, then decide.
@@ -133,6 +137,8 @@ func (s *testingSuite) notifyInitialized(sessionID string) {
 	if strings.Contains(out, "401 Unauthorized") {
 		s.T().Log("notifyInitialized hit 401; session likely already GC’d")
 	}
+	// Allow the gateway to register the session before the first RPC.
+	time.Sleep(75 * time.Millisecond)
 }
 
 // helper to run a request via curl pod to a given path and return combined output
