@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: mcp-website-fetcher
-        image: ghcr.io/peterj/mcp-website-fetcher:main
+        image: ghcr.io/kgateway-dev/mcp-website-fetcher:0.0.1
         imagePullPolicy: Always
 ---
 apiVersion: v1
@@ -51,20 +51,18 @@ spec:
     spec:
       containers:
         - name: mcp-admin-server
-          image: node:20-alpine
+          # image: ghcr.io/modelcontextprotocol/server-everything:latest
+          image: ghcr.io/kgateway-dev/mcp-admin-server:0.0.1
           command: ["npx"]
-          args: ["-y", "@modelcontextprotocol/server-everything", "streamableHttp", "--port", "3001"]
+          args: ["-y","@modelcontextprotocol/server-everything","streamableHttp","--port","3001"]
           ports:
             - containerPort: 3001
           readinessProbe:
-            tcpSocket:
-              port: 3001
+            tcpSocket: { port: 3001 }
             periodSeconds: 1
-            initialDelaySeconds: 0
-            failureThreshold: 60   # give npm time on cold start
+            failureThreshold: 60
           livenessProbe:
-            tcpSocket:
-              port: 3001
+            tcpSocket: { port: 3001 }
             periodSeconds: 10
 ---
 apiVersion: v1
