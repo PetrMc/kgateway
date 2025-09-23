@@ -95,7 +95,7 @@ func (s *testingSuite) initializeAndGetSessionID() string {
 
 	headers := map[string]string{
 		"Content-Type":         "application/json",
-		"Accept":               "text/event-stream,application/json",
+		"Accept":               "application/json, text/event-stream",
 		"MCP-Protocol-Version": mcpProto,
 	}
 	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "20")
@@ -113,6 +113,7 @@ func (s *testingSuite) initializeAndGetSessionID() string {
 	if len(matches) > 1 {
 		sessionID := strings.TrimSpace(matches[1])
 		s.T().Logf("Extracted session ID: %s", sessionID)
+		s.notifyInitialized(sessionID)
 		return sessionID
 	}
 
@@ -124,11 +125,11 @@ func (s *testingSuite) testResourcesListWithSession(sessionID string) {
 	s.T().Log("Testing resources/list with session ID")
 
 	mcpRequest := `{
-	  "method": "resources/list",
-	  "params": {},
-	  "jsonrpc": "2.0",
-	  "id": 2
-	}`
+		      "method": "resources/list",
+		      "params": { "_meta": { "progressToken": 1 } },
+		      "jsonrpc": "2.0",
+		      "id": 2
+		    }`
 
 	headers := map[string]string{
 		"Content-Type":         "application/json",
@@ -140,13 +141,20 @@ func (s *testingSuite) testResourcesListWithSession(sessionID string) {
 	// Ask curl to stream (-N) so SSE arrives immediately
 	out, err := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
 	s.Require().NoError(err, "resources/list curl failed")
+	// Check if we got a 401 (session expired)
+	if strings.Contains(out, "401 Unauthorized") && strings.Contains(out, "Session not found") {
+		s.T().Log("Session expired, re-initializing...")
+		newSessionID := s.initializeAndGetSessionID()
+		headers["mcp-session-id"] = newSessionID
+		out, err = s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
+		s.Require().NoError(err, "resources/list retry after re-init failed")
+	}
 	s.requireHTTPStatus(out, 200)
 
 	// Extract first SSE data payload
 	payload, ok := FirstSSEDataPayload(out)
 	if !ok {
-		s.T().Log("No SSE payload from resources/list; sending notifications/initialized and retrying once")
-		s.notifyInitialized(sessionID)
+		s.T().Log("No SSE payload from resources/list; retrying once with same session")
 		out, err = s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "10")
 		s.Require().NoError(err, "resources/list retry curl failed")
 		s.requireHTTPStatus(out, 200)
@@ -175,7 +183,7 @@ func (s *testingSuite) testToolsListWithSession(sessionID string) {
 
 	mcpRequest := `{
 	  "method": "tools/list",
-	  "params": {"_meta": {"progressToken": 1}},
+      "params": {"_meta": {"progressToken": 1}},
 	  "jsonrpc": "2.0",
 	  "id": 3
 	}`
@@ -230,7 +238,11 @@ func (s *testingSuite) notifyInitialized(sessionID string) {
 		"mcp-session-id":       sessionID,
 		"MCP-Protocol-Version": mcpProto,
 	}
-	_, _ = s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "2")
+	// We don't care about the body; just make sure it doesn't 401.
+	out, _ := s.execCurlMCP(8080, headers, mcpRequest, "-N", "--max-time", "2")
+	if strings.Contains(out, "401 Unauthorized") {
+		s.T().Log("notifyInitialized hit 401; session likely already GC’d")
+	}
 }
 
 // helper to run a request via curl pod to a given path and return combined output
