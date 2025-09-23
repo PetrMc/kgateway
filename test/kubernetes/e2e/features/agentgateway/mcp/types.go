@@ -1,42 +1,80 @@
 package mcp
 
 import (
-	"net/http"
 	"path/filepath"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/kgateway-dev/kgateway/v2/pkg/utils/fsutils"
-	testmatchers "github.com/kgateway-dev/kgateway/v2/test/gomega/matchers"
+	"github.com/kgateway-dev/kgateway/v2/test/kubernetes/e2e"
 	"github.com/kgateway-dev/kgateway/v2/test/kubernetes/e2e/defaults"
 	"github.com/kgateway-dev/kgateway/v2/test/kubernetes/e2e/tests/base"
-	. "github.com/onsi/gomega"
 )
 
+type testingSuite struct {
+	*base.BaseTestingSuite
+	// mcpSessionID is the session ID for the MCP server
+	mcpSessionID string
+}
+
+type ToolsListResponse struct {
+	JSONRPC string `json:"jsonrpc"`
+	Result  *struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			Description string `json:"description,omitempty"`
+		} `json:"tools"`
+	} `json:"result,omitempty"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+type ResourcesListResponse struct {
+	JSONRPC string `json:"jsonrpc"`
+	Result  *struct {
+		Resources []struct {
+			URI  string `json:"uri"`
+			Name string `json:"name,omitempty"`
+		} `json:"resources"`
+	} `json:"result,omitempty"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// InitializeResponse models the MCP initialize payload.
+type InitializeResponse struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      int    `json:"id"`
+	Result  *struct {
+		ProtocolVersion string         `json:"protocolVersion"`
+		Capabilities    map[string]any `json:"capabilities"`
+		ServerInfo      struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+		Instructions string `json:"instructions,omitempty"`
+	} `json:"result,omitempty"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// mcpProto is the protocol version for the MCP server
+const mcpProto = "2025-03-26"
+
 var (
+	_ e2e.NewSuiteFunc = NewTestingSuite
+	// Gateway defaults used by this feature suite
+	gatewayName      = "gw"
+	gatewayNamespace = "default"
+
 	// manifests
 	setupManifest        = filepath.Join(fsutils.MustGetThisDir(), "testdata", "common.yaml")
 	staticSetupManifest  = filepath.Join(fsutils.MustGetThisDir(), "testdata", "static.yaml")
 	dynamicSetupManifest = filepath.Join(fsutils.MustGetThisDir(), "testdata", "dynamic.yaml")
-	// adminSetupManifest   = filepath.Join(fsutils.MustGetThisDir(), "testdata", "admin.yaml")
-
-	// Core infrastructure objects that we need to track
-	gatewayObjectMeta = metav1.ObjectMeta{
-		Name:      "gw",
-		Namespace: "default",
-	}
-
-	dynamicGatewayObjectMeta = metav1.ObjectMeta{
-		Name:      "gw",
-		Namespace: "default",
-	}
-	dynamicGatewayService = &corev1.Service{ObjectMeta: dynamicGatewayObjectMeta}
-
-	expectMCPInitializeResponse = &testmatchers.HttpResponse{
-		StatusCode: http.StatusOK,
-		Body:       And(ContainSubstring("result"), ContainSubstring("protocolVersion")),
-	}
 
 	// Base test setup - common resources + curl pod
 	setup = base.TestCase{
@@ -52,6 +90,4 @@ var (
 	staticSetup = base.TestCase{
 		Manifests: []string{staticSetupManifest},
 	}
-
-	expectHTTP200 = &testmatchers.HttpResponse{StatusCode: http.StatusOK}
 )

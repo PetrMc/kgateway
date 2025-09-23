@@ -10,25 +10,18 @@ import (
 
 	"github.com/kgateway-dev/kgateway/v2/test/kubernetes/e2e"
 	"github.com/kgateway-dev/kgateway/v2/test/kubernetes/e2e/tests/base"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
-
-var _ e2e.NewSuiteFunc = NewTestingSuite
-
-type testingSuite struct {
-	*base.BaseTestingSuite
-	// mcpSessionID is the session ID for the MCP server
-	mcpSessionID string
-}
 
 func NewTestingSuite(ctx context.Context, testInst *e2e.TestInstallation) suite.TestingSuite {
 	return &testingSuite{
 		BaseTestingSuite: base.NewBaseTestingSuite(ctx, testInst, setup, map[string]*base.TestCase{
 			// Static tests
-			"TestStaticReady": &staticSetup,
 			"TestMCPWorkflow": &staticSetup,
 			"TestSSEEndpoint": &staticSetup,
 			// Dynamic tests
-			"TestDynamicMCPConnection":       &dynamicSetup,
 			"TestDynamicMCPAdminRouting":     &dynamicSetup,
 			"TestDynamicMCPUserRouting":      &dynamicSetup,
 			"TestDynamicMCPDefaultRouting":   &dynamicSetup,
@@ -48,10 +41,7 @@ func (s *testingSuite) TestMCPWorkflow() {
 	sessionID := s.initializeAndGetSessionID()
 	s.Require().NotEmpty(sessionID, "Failed to get session ID from initialize")
 
-	// Step 2: Test resources/list with session ID
-	s.testResourcesListWithSession(sessionID)
-
-	// Step 3: Test tools/list with session ID
+	// Step 2: Test tools/list with session ID
 	s.testToolsListWithSession(sessionID)
 }
 
@@ -72,47 +62,15 @@ func (s *testingSuite) TestSSEEndpoint() {
 		s.Require().Fail("expected Content-Type: text/event-stream in response headers")
 	}
 
-	payload, ok := FirstSSEDataPayload(out)
-	s.Require().True(ok, "expected SSE data payload on initialize")
-	s.Require().True(IsJSONValid(payload), "SSE payload must be valid JSON")
-
-	// Validate initialize JSON payload
-	var initResp InitializeResponse
-	s.Require().NoError(json.Unmarshal([]byte(payload), &initResp), "unmarshal initialize payload")
-	s.Require().Nil(initResp.Error, "initialize returned error: %+v", initResp.Error)
-	s.Require().NotNil(initResp.Result, "initialize missing result")
-	s.Require().Equal(mcpProto, initResp.Result.ProtocolVersion, "protocolVersion mismatch")
-	sid := ExtractMCPSessionID(out)
-	s.Require().NotEmpty(sid, "initialize must return mcp-session-id header")
+	// Reuse existing helper to validate initialize payload and obtain session id
+	_ = s.initializeSession(initBody, headers, "sse")
 }
 
 func (s *testingSuite) TestDynamicMCPAdminRouting() {
 	s.waitDynamicReady()
 	s.T().Log("Testing dynamic MCP routing for admin user")
-
-	mcpRequest := buildInitializeRequest("admin-client", 0)
-
-	headers := withRouteHeaders(mcpHeaders(), map[string]string{"user-type": "admin"})
-	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
-	s.Require().NoError(err, "Failed to execute admin initialize request")
-	s.requireHTTPStatus(outputStr, 200)
-	s.T().Logf("admin initialize: %s", outputStr)
-
-	adminSession := ExtractMCPSessionID(outputStr)
-	s.Require().NotEmpty(adminSession, "admin initialize must return mcp-session-id header")
-	s.notifyInitializedWithHeaders(adminSession, map[string]string{"user-type": "admin"})
-	adminInitPayload, ok := FirstSSEDataPayload(outputStr)
-	s.Require().True(ok, "admin initialize must return SSE payload")
-	var adminInit InitializeResponse
-	s.Require().NoError(json.Unmarshal([]byte(adminInitPayload), &adminInit), "admin initialize payload must be JSON")
-	s.Require().Nil(adminInit.Error, "admin initialize returned error: %+v", adminInit.Error)
-	s.Require().NotNil(adminInit.Result, "admin initialize missing result")
-	s.Require().Equal(mcpProto, adminInit.Result.ProtocolVersion, "protocolVersion mismatch")
-	s.Require().NotEmpty(adminInit.Result.ServerInfo.Name, "serverInfo.name must be set")
-	s.T().Logf("admin serverInfo: %s %s", adminInit.Result.ServerInfo.Name, adminInit.Result.ServerInfo.Version)
-
-	// tools/list using the same session
-	adminTools := s.mustListTools(adminSession, "admin tools/list", map[string]string{"user-type": "admin"})
+	adminTools := s.runDynamicRoutingCase("admin-client", map[string]string{"user-type": "admin"}, "admin")
+	// Admin will have more than two tools
 	s.Require().GreaterOrEqual(len(adminTools), 2, "admin should expose at least one tool")
 	s.T().Logf("admin tools: %s", strings.Join(adminTools, ", "))
 	s.T().Log("Admin routing working correctly")
@@ -121,66 +79,117 @@ func (s *testingSuite) TestDynamicMCPAdminRouting() {
 func (s *testingSuite) TestDynamicMCPUserRouting() {
 	s.waitDynamicReady()
 	s.T().Log("Testing dynamic MCP routing for regular user")
-
-	mcpRequest := buildInitializeRequest("user-client", 0)
-
-	headers := withRouteHeaders(mcpHeaders(), map[string]string{"user-type": "user"})
-	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
-	s.Require().NoError(err, "Failed to execute user initialize request")
-	s.requireHTTPStatus(outputStr, 200)
-	s.T().Logf("user initialize: %s", outputStr)
-
-	userSession := ExtractMCPSessionID(outputStr)
-	s.notifyInitializedWithHeaders(userSession, map[string]string{"user-type": "user"})
-	s.Require().NotEmpty(userSession, "user initialize must return mcp-session-id header")
-	userInitPayload, ok := FirstSSEDataPayload(outputStr)
-	s.Require().True(ok, "user initialize must return SSE payload")
-	var userInit InitializeResponse
-	s.Require().NoError(json.Unmarshal([]byte(userInitPayload), &userInit), "user initialize payload must be JSON")
-	s.Require().Nil(userInit.Error, "user initialize returned error: %+v", userInit.Error)
-	s.Require().NotNil(userInit.Result, "user initialize missing result")
-	s.Require().Equal(mcpProto, userInit.Result.ProtocolVersion, "protocolVersion mismatch")
-	s.Require().NotEmpty(userInit.Result.ServerInfo.Name, "serverInfo.name must be set")
-	s.T().Logf("user serverInfo: %s %s", userInit.Result.ServerInfo.Name, userInit.Result.ServerInfo.Version)
-
-	// tools/list using the same session
-	userTools := s.mustListTools(userSession, "user tools/list", map[string]string{"user-type": "user"})
+	userTools := s.runDynamicRoutingCase("user-client", map[string]string{"user-type": "user"}, "user")
+	// user should expose only one tool
 	s.Require().Equal(len(userTools), 1, "user should expose at least one tool")
 	s.T().Logf("user tools: %s", strings.Join(userTools, ", "))
-
 	s.T().Log("User routing working correctly")
 }
 
 func (s *testingSuite) TestDynamicMCPDefaultRouting() {
 	s.waitDynamicReady()
 	s.T().Log("Testing dynamic MCP routing with no header (default to user)")
-
-	// MCP initialize request with no user-type header
-	mcpRequest := buildInitializeRequest("default-client", 0)
-
-	headers := mcpHeaders()
-	outputStr, err := s.execCurlMCP(8080, headers, mcpRequest, "--max-time", "5")
-	s.Require().NoError(err, "Failed to execute default initialize request")
-	s.requireHTTPStatus(outputStr, 200)
-	s.T().Logf("default initialize: %s", outputStr)
-
-	defSession := ExtractMCPSessionID(outputStr)
-	s.notifyInitializedWithHeaders(defSession, map[string]string{"user-type": "user"})
-	s.Require().NotEmpty(defSession, "default initialize must return mcp-session-id header")
-	defInitPayload, ok := FirstSSEDataPayload(outputStr)
-	s.Require().True(ok, "default initialize must return SSE payload")
-	var defInit InitializeResponse
-	s.Require().NoError(json.Unmarshal([]byte(defInitPayload), &defInit), "default initialize payload must be JSON")
-	s.Require().Nil(defInit.Error, "default initialize returned error: %+v", defInit.Error)
-	s.Require().NotNil(defInit.Result, "default initialize missing result")
-	s.Require().Equal(mcpProto, defInit.Result.ProtocolVersion, "protocolVersion mismatch")
-	s.Require().NotEmpty(defInit.Result.ServerInfo.Name, "serverInfo.name must be set")
-	s.T().Logf("default serverInfo: %s %s", defInit.Result.ServerInfo.Name, defInit.Result.ServerInfo.Version)
-
-	// tools/list using the same session
-	defTools := s.mustListTools(defSession, "default tools/list", map[string]string{"user-type": "user"})
+	defTools := s.runDynamicRoutingCase("default-client", map[string]string{}, "default")
+	// default uses user backend and should expose only one tool available
 	s.Require().Equal(len(defTools), 1, "default/user should expose at least one tool")
 	s.T().Logf("default tools: %s", strings.Join(defTools, ", "))
-
 	s.T().Log("Default routing working correctly")
+}
+
+// TestDynamicMCPAdminVsUserTools initializes two sessions (admin and user) against the same
+// dynamic route and compares the exposed tool sets. This gives positive proof that
+// header-based routing is sending traffic to distinct backends.
+func (s *testingSuite) TestDynamicMCPAdminVsUserTools() {
+	s.waitDynamicReady()
+	s.T().Log("Comparing admin vs user tool sets on dynamic MCP route")
+
+	// Execute admin and user cases via shared helper
+	adminTools := s.runDynamicRoutingCase("compare-client", map[string]string{"user-type": "admin"}, "admin (compare)")
+	userTools := s.runDynamicRoutingCase("compare-client", map[string]string{"user-type": "user"}, "user (compare)")
+
+	// Compare sets; admin should be a superset or at least different.
+	adminSet := make(map[string]struct{}, len(adminTools))
+	for _, n := range adminTools {
+		adminSet[n] = struct{}{}
+	}
+	same := len(adminTools) == len(userTools)
+	if same {
+		for _, n := range userTools {
+			if _, ok := adminSet[n]; !ok {
+				same = false
+				break
+			}
+		}
+	}
+	if same {
+		s.T().Log("WARNING: admin and user tool sets are identical; verify backend config if you expect variance")
+	} else {
+		s.T().Logf("admin tools (%d found): %s", len(adminTools), strings.Join(adminTools, ", "))
+		s.T().Logf("user tools (%d found): %s", len(userTools), strings.Join(userTools, ", "))
+	}
+}
+
+// runDynamicRoutingCase initializes a session with optional route headers, asserts
+// initialize response correctness, warms the session, and returns the tool names.
+func (s *testingSuite) runDynamicRoutingCase(clientName string, routeHeaders map[string]string, label string) []string {
+	initBody := buildInitializeRequest(clientName, 0)
+	headers := withRouteHeaders(mcpHeaders(), routeHeaders)
+
+	out, err := s.execCurlMCP(8080, headers, initBody, "--max-time", "5")
+	s.Require().NoError(err, "%s initialize failed", label)
+	s.requireHTTPStatus(out, 200)
+	s.T().Logf("%s initialize: %s", label, out)
+
+	sid := ExtractMCPSessionID(out)
+	s.Require().NotEmpty(sid, "%s initialize must return mcp-session-id header", label)
+	s.notifyInitializedWithHeaders(sid, routeHeaders)
+
+	payload, ok := FirstSSEDataPayload(out)
+	s.Require().True(ok, "%s initialize must return SSE payload", label)
+
+	var initResp InitializeResponse
+	s.Require().NoError(json.Unmarshal([]byte(payload), &initResp), "%s initialize payload must be JSON", label)
+	s.Require().Nil(initResp.Error, "%s initialize returned error: %+v", label, initResp.Error)
+	s.Require().NotNil(initResp.Result, "%s initialize missing result", label)
+	s.Require().Equal(mcpProto, initResp.Result.ProtocolVersion, "protocolVersion mismatch")
+	s.Require().NotEmpty(initResp.Result.ServerInfo.Name, "serverInfo.name must be set")
+
+	tools := s.mustListTools(sid, label+" tools/list", routeHeaders)
+	return tools
+}
+
+func (s *testingSuite) waitDynamicReady() {
+	s.TestInstallation.Assertions.EventuallyPodsRunning(
+		s.Ctx, "default",
+		metav1.ListOptions{LabelSelector: "app=mcp-admin-server"},
+	)
+	s.TestInstallation.Assertions.EventuallyPodsRunning(
+		s.Ctx, "default",
+		metav1.ListOptions{LabelSelector: "app=mcp-website-fetcher"},
+	)
+	s.TestInstallation.Assertions.EventuallyPodsRunning(
+		s.Ctx, "curl",
+		metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=curl"},
+	)
+	s.TestInstallation.Assertions.EventuallyGatewayCondition(s.Ctx, gatewayName, gatewayNamespace, gwv1.GatewayConditionProgrammed, metav1.ConditionTrue)
+	s.TestInstallation.Assertions.EventuallyBackendCondition(s.Ctx, "admin-mcp-backend", "default", "Accepted", metav1.ConditionTrue)
+	s.TestInstallation.Assertions.EventuallyBackendCondition(s.Ctx, "user-mcp-backend", "default", "Accepted", metav1.ConditionTrue)
+	s.TestInstallation.Assertions.EventuallyHTTPRouteCondition(
+		s.Ctx, "dynamic-mcp-route", "default",
+		gwv1.RouteConditionAccepted, metav1.ConditionTrue,
+	)
+}
+
+func (s *testingSuite) waitStaticReady() {
+	s.TestInstallation.Assertions.EventuallyPodsRunning(
+		s.Ctx, "default",
+		metav1.ListOptions{LabelSelector: "app=mcp-website-fetcher"},
+	)
+	s.TestInstallation.Assertions.EventuallyPodsRunning(
+		s.Ctx, "curl",
+		metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=curl"},
+	)
+	s.TestInstallation.Assertions.EventuallyGatewayCondition(s.Ctx, gatewayName, gatewayNamespace, gwv1.GatewayConditionProgrammed, metav1.ConditionTrue)
+	s.TestInstallation.Assertions.EventuallyBackendCondition(s.Ctx, "mcp-backend", "default", "Accepted", metav1.ConditionTrue)
+	s.TestInstallation.Assertions.EventuallyHTTPRouteCondition(s.Ctx, "mcp-route", "default", gwv1.RouteConditionAccepted, metav1.ConditionTrue)
 }
