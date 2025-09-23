@@ -264,7 +264,9 @@ func (s *testingSuite) execCurl(port int, path string, headers map[string]string
 
 // helper to run a POST to /mcp with optional headers and body via curl pod and return combined output
 func (s *testingSuite) execCurlMCP(port int, headers map[string]string, body string, extraArgs ...string) (string, error) {
-	return s.execCurl(port, "/mcp", headers, body, extraArgs...)
+	out, err := s.execCurl(port, "/mcp", headers, body, extraArgs...)
+	s.T().Logf("=== execCurlMCP output ===\n%s\n=== end execCurlMCP ===", out)
+	return out, err
 }
 
 // helper to assert HTTP status from verbose curl output (supports HTTP/1.1 and HTTP/2)
