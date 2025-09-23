@@ -97,6 +97,65 @@ func (s *testingSuite) TestMCPWorkflow() {
 	s.testToolsListWithSession(sessionID)
 }
 
+// TestSSEEndpoint validates SSE transport semantics on initialize: HTTP 200, Content-Type
+// is text/event-stream, a JSON SSE data payload is present, and a session ID header is returned.
+func (s *testingSuite) TestSSEEndpoint() {
+	// Ensure components are ready similar to the connection test
+	s.TestInstallation.Assertions.EventuallyPodsRunning(s.Ctx, "default", metav1.ListOptions{
+		LabelSelector: "app=mcp-website-fetcher",
+	})
+	s.TestInstallation.Assertions.EventuallyPodsRunning(s.Ctx, "curl", metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=curl",
+	})
+	s.TestInstallation.Assertions.EventuallyGatewayCondition(s.Ctx, "gw", "default", gwv1.GatewayConditionProgrammed, metav1.ConditionTrue)
+	s.TestInstallation.Assertions.EventuallyBackendCondition(s.Ctx, "mcp-backend", "default", "Accepted", metav1.ConditionTrue)
+	s.TestInstallation.Assertions.EventuallyHTTPRouteCondition(s.Ctx, "mcp-route", "default", gwv1.RouteConditionAccepted, metav1.ConditionTrue)
+
+	// Send initialize expecting SSE
+	initBody := `{
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"roots": {}},
+            "clientInfo": {"name": "sse-client", "version": "1.0.0"}
+        },
+        "jsonrpc": "2.0",
+        "id": 0
+    }`
+
+	headers := map[string]string{
+		"Content-Type":         "application/json",
+		"Accept":               "text/event-stream,application/json",
+		"MCP-Protocol-Version": mcpProto,
+	}
+	out, err := s.execCurlMCP(8080, headers, initBody, "-N", "--max-time", "8")
+	s.Require().NoError(err, "SSE initialize curl failed")
+
+	// Validate HTTP status and Content-Type header
+	s.requireHTTPStatus(out, 200)
+	ctRe := regexp.MustCompile(`(?mi)^<\s*content-type:\s*text/event-stream\b`)
+	if ctRe.FindStringIndex(out) == nil {
+		s.logCurl("missing text/event-stream content-type", out)
+		s.Require().Fail("expected Content-Type: text/event-stream in response headers")
+	}
+
+	// Extract first SSE data payload
+	payload, ok := FirstSSEDataPayload(out)
+	s.Require().True(ok, "expected SSE data payload on initialize")
+	s.Require().True(IsJSONValid(payload), "SSE payload must be valid JSON")
+
+	// Validate initialize JSON payload
+	var initResp InitializeResponse
+	s.Require().NoError(json.Unmarshal([]byte(payload), &initResp), "unmarshal initialize payload")
+	s.Require().Nil(initResp.Error, "initialize returned error: %+v", initResp.Error)
+	s.Require().NotNil(initResp.Result, "initialize missing result")
+	s.Require().Equal(mcpProto, initResp.Result.ProtocolVersion, "protocolVersion mismatch")
+
+	// Ensure session id header is present
+	sid := ExtractMCPSessionID(out)
+	s.Require().NotEmpty(sid, "initialize must return mcp-session-id header")
+}
+
 func (s *testingSuite) initializeAndGetSessionID() string {
 	s.T().Log("Initializing MCP and extracting session ID")
 
