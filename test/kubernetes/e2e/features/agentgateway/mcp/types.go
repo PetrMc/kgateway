@@ -19,7 +19,7 @@ var (
 	setupManifest        = filepath.Join(fsutils.MustGetThisDir(), "testdata", "common.yaml")
 	staticSetupManifest  = filepath.Join(fsutils.MustGetThisDir(), "testdata", "static.yaml")
 	dynamicSetupManifest = filepath.Join(fsutils.MustGetThisDir(), "testdata", "dynamic.yaml")
-	adminSetupManifest   = filepath.Join(fsutils.MustGetThisDir(), "testdata", "admin.yaml")
+	// adminSetupManifest   = filepath.Join(fsutils.MustGetThisDir(), "testdata", "admin.yaml")
 
 	// Core infrastructure objects that we need to track
 	gatewayObjectMeta = metav1.ObjectMeta{
@@ -45,7 +45,7 @@ var (
 
 	// Dynamic test setup (only dynamic-specific resources)
 	dynamicSetup = base.TestCase{
-		Manifests: []string{adminSetupManifest, dynamicSetupManifest},
+		Manifests: []string{dynamicSetupManifest},
 	}
 
 	// Static test setup (resources needed for non-dynamic tests)

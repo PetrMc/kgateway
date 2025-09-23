@@ -11,7 +11,7 @@ spec:
       static:
         host: mcp-admin-server.default.svc.cluster.local
         port: 80
-        protocol: SSE
+        protocol: StreamableHTTP
 ---
 # User MCP Backend  
 apiVersion: gateway.kgateway.dev/v1alpha1

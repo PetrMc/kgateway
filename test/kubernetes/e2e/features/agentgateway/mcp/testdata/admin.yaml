@@ -1,10 +1,11 @@
----
-# Second MCP server for dynamic routing
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-admin-server
+  labels:
+    app: mcp-admin-server
 spec:
+  replicas: 1
   selector:
     matchLabels:
       app: mcp-admin-server
@@ -15,12 +16,22 @@ spec:
         app.kubernetes.io/name: mcp-admin-server
     spec:
       containers:
-      - name: mcp-admin-server
-        image: ghcr.io/peterj/mcp-website-fetcher:main
-        imagePullPolicy: Always
-        env:
-        - name: MCP_SERVER_NAME
-          value: "admin-mcp-server"
+        - name: mcp-admin-server
+          image: node:20-alpine
+          command: ["npx"]
+          args: ["-y", "@modelcontextprotocol/server-everything", "streamableHttp", "--port", "3001"]
+          ports:
+            - containerPort: 3001
+          readinessProbe:
+            tcpSocket:
+              port: 3001
+            periodSeconds: 1
+            initialDelaySeconds: 0
+            failureThreshold: 60   # give npm time on cold start
+          livenessProbe:
+            tcpSocket:
+              port: 3001
+            periodSeconds: 10
 ---
 apiVersion: v1
 kind: Service
@@ -32,21 +43,8 @@ spec:
   selector:
     app: mcp-admin-server
   ports:
-  - port: 80
-    targetPort: 8000
-    appProtocol: kgateway.dev/mcp
----
-# Admin MCP Backend
-apiVersion: gateway.kgateway.dev/v1alpha1
-kind: Backend
-metadata:
-  name: admin-mcp-backend
-spec:
-  type: MCP
-  mcp:
-    targets:
-    - name: admin-target
-      static:
-        host: mcp-admin-server.default.svc.cluster.local
-        port: 80
-        protocol: SSE
+    - name: http
+      port: 80          # what your Backend references
+      targetPort: 3001  # containerPort above
+      appProtocol: kgateway.dev/mcp
+  type: ClusterIP
