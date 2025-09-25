@@ -31,7 +31,7 @@ kubectl apply -f test/kubernetes/e2e/features/agentgateway/rate_limit/testdata/c
 Deploy LLM config:
 
 ```bash
-kubectl apply -f test/kubernetes/e2e/features/agentgateway/rate_limit/testdata/tokens-rl.yaml
+kubectl apply -f test/kubernetes/e2e/features/agentgateway/rate_limit/testdata/global-tokens-rl.yaml
 ```
 
 ## Test the configuration:
@@ -60,19 +60,31 @@ should have two - `Rate Limit` and `Authorization`.
     }
   },
   {
-    "name": "trafficpolicy/default/token-rate-limit/super-gateway:rl-local",
+    "name": "trafficpolicy/default/global-token-rate-limit/super-gateway:rl-global",
     "target": {
       "gateway": "default/super-gateway"
     },
     "policy": {
-      "localRateLimit": [
-        {
-          "maxTokens": 50,
-          "tokensPerFill": 10,
-          "fillInterval": "10s",
-          "type": "tokens"
-        }
-      ]
+      "remoteRateLimit": {
+        "domain": "api-gateway",
+        "target": {
+          "service": {
+            "name": "kgateway-test-extensions/ratelimit.kgateway-test-extensions.svc.cluster.local",
+            "port": 8081
+          }
+        },
+        "descriptors": [
+          {
+            "entries": [
+              [
+                "X-User-ID",
+                "request.headers[\"x-user-id\"]"
+              ]
+            ],
+            "type": "tokens"
+          }
+        ]
+      }
     }
   }
 ]
@@ -108,10 +120,10 @@ you should see OpenAI backend in the output:
                   "tokenize": false
                 },
                 "info": {
-                  "health": 1.0,
-                  "request_latency": 0.0,
+                  "health": 0.6193845969999999,
+                  "request_latency": 0.9883733316640071,
                   "pending_requests": 0,
-                  "total_requests": 0,
+                  "total_requests": 16,
                   "evicted_until": null
                 }
               }
@@ -144,34 +156,35 @@ curl -H "Host: ai.example.com" http://localhost:8080/v1/chat/completions -X POST
 
 - Now confirm rate limiting by sending the repeating request:
 ```bash
-for i in {1..10}; do echo "Request $i:"; curl -H "Host: ai.example.com" http://localhost:8080/v1/chat/completions -X POST -H "Content-Type: application/json" -d "{\"model\": \"gpt-3.5-turbo\", \"messages\": [{\"role\": \"user\", \"content\": \"Test message $i\"}], \"max_tokens\": 10}" -w "Status: %{http_code}\n" -s; sleep 1; done
+for i in {1..8}; do 
+  echo "Request $i:"; 
+  curl -H "Host: ai.example.com" \
+       -H "X-User-ID: user123" \
+       http://localhost:8080/v1/chat/completions \
+       -X POST -H "Content-Type: application/json" \
+       -d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Test message '$i' with more content to generate more tokens"}], "max_tokens": 50}' \
+       -w "Status: %{http_code}\n" -s; 
+  sleep 2; 
+done
 ```
 After few succesful requests, the ratelimiting token count will be full and the request will get `429`:
 ```output
 Request 1:
-{"id":"chatcmpl-CJkgQi7YlLwVPU4rIOrp3FzNrTTj5","choices":[{"index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"},"finish_reason":"stop"}],"created":1758823718,"model":"gpt-3.5-turbo-0125","service_tier":"default","object":"chat.completion","usage":{"prompt_tokens":11,"completion_tokens":9,"total_tokens":20,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0}}}Status: 200
+{"id":"chatcmpl-CJoAwRPQKGMp27jHGdEhOnsLMWVDZ","choices":[{"index":0,"message":{"content":"This is a sample message to test the functionality of the token generation. It is important to ensure that the tokens are being generated accurately and efficiently in order to improve the overall performance of the system. Let's see how many tokens are generated from this message","role":"assistant"},"finish_reason":"length"}],"created":1758837142,"model":"gpt-3.5-turbo-0125","service_tier":"default","object":"chat.completion","usage":{"prompt_tokens":18,"completion_tokens":50,"total_tokens":68,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0}}}Status: 200
 Request 2:
-{"id":"chatcmpl-CJkgScRhacVKpYuWNfdWIqgJ3DTnY","choices":[{"index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"},"finish_reason":"stop"}],"created":1758823720,"model":"gpt-3.5-turbo-0125","service_tier":"default","object":"chat.completion","usage":{"prompt_tokens":11,"completion_tokens":9,"total_tokens":20,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0}}}Status: 200
+{"id":"chatcmpl-CJoAzYOWOPdAr3NFIdLgDPTW4Om6K","choices":[{"index":0,"message":{"content":"Hello! Thank you for reaching out. I'm glad to assist you with any questions or concerns you may have. Let me know how I can help.","role":"assistant"},"finish_reason":"stop"}],"created":1758837145,"model":"gpt-3.5-turbo-0125","service_tier":"default","object":"chat.completion","usage":{"prompt_tokens":18,"completion_tokens":31,"total_tokens":49,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0}}}Status: 200
 Request 3:
-{"id":"chatcmpl-CJkgUJVlR0H7RrTayHGpeVbVR5bp9","choices":[{"index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"},"finish_reason":"stop"}],"created":1758823722,"model":"gpt-3.5-turbo-0125","service_tier":"default","object":"chat.completion","usage":{"prompt_tokens":11,"completion_tokens":9,"total_tokens":20,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0}}}Status: 200
+Status: 429
 Request 4:
-{"id":"chatcmpl-CJkgVrRDlDE96oTNPud3p4k7CoN1e","choices":[{"index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"},"finish_reason":"stop"}],"created":1758823723,"model":"gpt-3.5-turbo-0125","service_tier":"default","object":"chat.completion","usage":{"prompt_tokens":11,"completion_tokens":9,"total_tokens":20,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0}}}Status: 200
+Status: 429
 Request 5:
-rate limit exceededStatus: 429
+Status: 429
 Request 6:
-rate limit exceededStatus: 429
+Status: 429
 Request 7:
-rate limit exceededStatus: 429
+Status: 429
 Request 8:
-rate limit exceededStatus: 429
-Request 9:
-rate limit exceededStatus: 429
-Request 10:
-rate limit exceededStatus: 429
+Status: 429
 ```
 
-
-
-
-
-
+You can switch the user-x within minute interval to see this is per user.
