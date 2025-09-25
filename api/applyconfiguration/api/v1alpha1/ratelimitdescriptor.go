@@ -6,6 +6,7 @@ package v1alpha1
 // with apply.
 type RateLimitDescriptorApplyConfiguration struct {
 	Entries []RateLimitDescriptorEntryApplyConfiguration `json:"entries,omitempty"`
+	Type    *string                                      `json:"type,omitempty"`
 }
 
 // RateLimitDescriptorApplyConfiguration constructs a declarative configuration of the RateLimitDescriptor type for use with
@@ -24,5 +25,13 @@ func (b *RateLimitDescriptorApplyConfiguration) WithEntries(values ...*RateLimit
 		}
 		b.Entries = append(b.Entries, *values[i])
 	}
+	return b
+}
+
+// WithType sets the Type field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Type field is set to the value of the last call.
+func (b *RateLimitDescriptorApplyConfiguration) WithType(value string) *RateLimitDescriptorApplyConfiguration {
+	b.Type = &value
 	return b
 }

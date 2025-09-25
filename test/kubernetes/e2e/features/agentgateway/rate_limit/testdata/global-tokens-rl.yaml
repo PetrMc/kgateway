@@ -1,0 +1,22 @@
+# Global token-based rate limiting policy
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: global-token-rate-limit
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: super-gateway
+  rateLimit:
+    global:
+      descriptors:
+      - entries:
+        - type: Generic
+          generic:
+            key: "user"
+            value: "default"
+        type: tokens  # This is the new field for token-based rate limiting
+      extensionRef:
+        name: global-ratelimit
+        namespace: kgateway-test-extensions

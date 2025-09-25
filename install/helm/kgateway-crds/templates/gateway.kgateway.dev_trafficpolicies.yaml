@@ -683,6 +683,12 @@ spec:
                                     !has(self.header)))
                               minItems: 1
                               type: array
+                            type:
+                              default: requests
+                              enum:
+                              - requests
+                              - tokens
+                              type: string
                           required:
                           - entries
                           type: object

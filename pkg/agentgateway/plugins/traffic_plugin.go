@@ -986,9 +986,24 @@ func processRateLimitDescriptor(descriptor v1alpha1.RateLimitDescriptor) *api.Po
 	if len(entries) == 0 {
 		return nil
 	}
+
+	// Determine the rate limit type based on descriptor configuration
+	rateLimitType := api.PolicySpec_RemoteRateLimit_REQUESTS // default to requests
+	if descriptor.Type != nil {
+		switch *descriptor.Type {
+		case "tokens":
+			rateLimitType = api.PolicySpec_RemoteRateLimit_TOKENS
+		case "requests":
+			rateLimitType = api.PolicySpec_RemoteRateLimit_REQUESTS
+		default:
+			logger.Warn("unknown rate limit type, defaulting to requests", "type", *descriptor.Type)
+			rateLimitType = api.PolicySpec_RemoteRateLimit_REQUESTS
+		}
+	}
+
 	return &api.PolicySpec_RemoteRateLimit_Descriptor{
 		Entries: entries,
-		Type:    api.PolicySpec_RemoteRateLimit_REQUESTS,
+		Type:    rateLimitType,
 	}
 }
 

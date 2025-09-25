@@ -296,6 +296,13 @@ type RateLimitDescriptor struct {
 	// +required
 	// +kubebuilder:validation:MinItems=1
 	Entries []RateLimitDescriptorEntry `json:"entries"`
+
+	// Type specifies whether this descriptor applies to requests or tokens.
+	// If not specified, it defaults to "requests" for backward compatibility.
+	// +optional
+	// +kubebuilder:default=requests
+	// +kubebuilder:validation:Enum=requests;tokens
+	Type *string `json:"type,omitempty"`
 }
 
 // RateLimitDescriptorEntryType defines the type of a rate limit descriptor entry.

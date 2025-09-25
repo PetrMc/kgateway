@@ -1,0 +1,122 @@
+# Rate limit server deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate-limit-server
+  namespace: kgateway-test-extensions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rate-limit-server
+  template:
+    metadata:
+      labels:
+        app: rate-limit-server
+    spec:
+      containers:
+      - name: rate-limit-server
+        image: envoyproxy/ratelimit:master
+        ports:
+        - containerPort: 8081
+        - containerPort: 8080
+        env:
+        - name: LOG_LEVEL
+          value: "debug"
+        - name: USE_STATSD
+          value: "false"
+        - name: RUNTIME_ROOT
+          value: "/data"
+        - name: RUNTIME_SUBDIRECTORY
+          value: "ratelimit"
+        - name: RUNTIME_WATCH_ROOT
+          value: "false"
+        - name: RUNTIME_IGNOREDOTFILES
+          value: "true"
+        command: ["/bin/ratelimit"]
+        volumeMounts:
+        - name: config-volume
+          mountPath: /data/ratelimit/config
+      volumes:
+      - name: config-volume
+        configMap:
+          name: rate-limit-config
+
+---
+# Rate limit server service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-limit-server
+  namespace: kgateway-test-extensions
+spec:
+  selector:
+    app: rate-limit-server
+  ports:
+  - name: grpc
+    port: 8081
+    targetPort: 8081
+  - name: http
+    port: 8080
+    targetPort: 8080
+
+---
+# Rate limit configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rate-limit-config
+  namespace: kgateway-test-extensions
+data:
+  config.yaml: |
+    domain: kgateway
+    descriptors:
+      - key: user
+        value: default
+        rate_limit:
+          unit: second
+          requests_per_unit: 10
+        # Token-based rate limiting
+        token_limit:
+          unit: second
+          tokens_per_unit: 50
+
+---
+# Gateway extension for rate limiting
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayExtension
+metadata:
+  name: global-ratelimit
+  namespace: kgateway-test-extensions
+spec:
+  type: RateLimit
+  rateLimit:
+    domain: kgateway
+    grpcService:
+      backendRef:
+        name: rate-limit-server
+        port: 8081
+
+---
+# Global token-based rate limiting policy
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: global-token-rate-limit
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: super-gateway
+  rateLimit:
+    global:
+      descriptors:
+      - entries:
+        - type: Generic
+          generic:
+            key: "user"
+            value: "default"
+        type: tokens  # Token-based rate limiting
+      extensionRef:
+        name: global-ratelimit
+        namespace: kgateway-test-extensions

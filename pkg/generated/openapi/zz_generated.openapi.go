@@ -6532,6 +6532,13 @@ func schema_kgateway_v2_api_v1alpha1_RateLimitDescriptor(ref common.ReferenceCal
 							},
 						},
 					},
+					"type": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Type specifies whether this descriptor applies to requests or tokens. If not specified, it defaults to \"requests\" for backward compatibility.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 				},
 				Required: []string{"entries"},
 			},
