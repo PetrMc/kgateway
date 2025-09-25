@@ -1,0 +1,57 @@
+---
+# OpenAI Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: openai-backend
+spec:
+  type: AI
+  ai:
+    llm:
+      openai:
+        authToken:
+          kind: SecretRef
+          secretRef:
+            name: openai-secret
+        model: gpt-3.5-turbo
+
+---
+# HTTPRoute to OpenAI backend
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: openai-route
+spec:
+  parentRefs:
+  - name: super-gateway
+  hostnames:
+  - "ai.example.com"
+  rules:
+  - backendRefs:
+    - name: openai-backend
+      kind: Backend
+      group: gateway.kgateway.dev
+      port: 443
+    matches:
+    - path:
+        type: PathPrefix
+        value: /v1
+
+---
+# Token-based rate limiting policy
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: token-rate-limit
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: super-gateway
+  rateLimit:
+    local:
+      tokenBucket:
+        maxTokens: 50
+        tokensPerFill: 10
+        fillInterval: 10s
+        type: tokens
