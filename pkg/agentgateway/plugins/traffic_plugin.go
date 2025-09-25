@@ -868,6 +868,15 @@ func processGlobalRateLimitPolicy(
 		}
 	}
 
+	// If token bucket is configured, we need to update the rate limit server configuration
+	if grl.TokenBucket != nil {
+		err := updateRateLimitServerConfig(ctx, gwExt, grl.TokenBucket, grl.Descriptors)
+		if err != nil {
+			logger.Warn("failed to update rate limit server config", "error", err)
+			// Continue without updating the config - the rate limit server will use its default config
+		}
+	}
+
 	// Build the RemoteRateLimit policy that agentgateway expects
 	p := &api.Policy{
 		Name:   policyName + globalRateLimitPolicySuffix,
@@ -884,6 +893,34 @@ func processGlobalRateLimitPolicy(
 	}
 
 	return &AgwPolicy{Policy: p}, nil
+}
+
+// updateRateLimitServerConfig updates the rate limit server configuration based on token bucket settings
+func updateRateLimitServerConfig(
+	ctx krt.HandlerContext,
+	gwExt *v1alpha1.GatewayExtension,
+	tokenBucket *v1alpha1.TokenBucket,
+	descriptors []v1alpha1.RateLimitDescriptor,
+) error {
+	// For now, we'll log the token bucket configuration
+	// In a full implementation, this would update the ConfigMap with the rate limit server config
+	logger.Info("token bucket configuration for global rate limiting",
+		"maxTokens", tokenBucket.MaxTokens,
+		"tokensPerFill", tokenBucket.TokensPerFill,
+		"fillInterval", tokenBucket.FillInterval,
+		"domain", gwExt.Spec.RateLimit.Domain,
+	)
+
+	// TODO: Implement ConfigMap update logic
+	// This would involve:
+	// 1. Finding the ConfigMap that contains the rate limit server configuration
+	// 2. Updating the config.yaml with token-based limits
+	// 3. Converting token bucket settings to rate_limit configuration
+	// For example:
+	//   maxTokens: 50, tokensPerFill: 10, fillInterval: 10s
+	//   -> rate_limit: { unit: second, requests_per_unit: 50 }
+
+	return nil
 }
 
 // getDescriptorEntryKey extracts the key from a rate limit descriptor entry

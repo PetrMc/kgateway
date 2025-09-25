@@ -4,9 +4,9 @@
 
 1. Deploy kind cluster with agentgateway support:
 
+```bash
 make run HELM_ADDITIONAL_VALUES=test/kubernetes/e2e/tests/manifests/agent-gateway-integration.yaml
-
-Take care of the key definition
+```
 
 2. Define your OPENAI_API_KEY env variable
 

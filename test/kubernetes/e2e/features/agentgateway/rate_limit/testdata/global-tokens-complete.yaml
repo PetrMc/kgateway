@@ -1,88 +1,9 @@
-# Rate limit server deployment
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: rate-limit-server
-  namespace: kgateway-test-extensions
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: rate-limit-server
-  template:
-    metadata:
-      labels:
-        app: rate-limit-server
-    spec:
-      containers:
-      - name: rate-limit-server
-        image: envoyproxy/ratelimit:master
-        ports:
-        - containerPort: 8081
-        - containerPort: 8080
-        env:
-        - name: LOG_LEVEL
-          value: "debug"
-        - name: USE_STATSD
-          value: "false"
-        - name: RUNTIME_ROOT
-          value: "/data"
-        - name: RUNTIME_SUBDIRECTORY
-          value: "ratelimit"
-        - name: RUNTIME_WATCH_ROOT
-          value: "false"
-        - name: RUNTIME_IGNOREDOTFILES
-          value: "true"
-        command: ["/bin/ratelimit"]
-        volumeMounts:
-        - name: config-volume
-          mountPath: /data/ratelimit/config
-      volumes:
-      - name: config-volume
-        configMap:
-          name: rate-limit-config
-
----
-# Rate limit server service
 apiVersion: v1
-kind: Service
+kind: Namespace
 metadata:
-  name: rate-limit-server
-  namespace: kgateway-test-extensions
-spec:
-  selector:
-    app: rate-limit-server
-  ports:
-  - name: grpc
-    port: 8081
-    targetPort: 8081
-  - name: http
-    port: 8080
-    targetPort: 8080
-
+  name: kgateway-test-extensions
+spec: {}
 ---
-# Rate limit configuration
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: rate-limit-config
-  namespace: kgateway-test-extensions
-data:
-  config.yaml: |
-    domain: kgateway
-    descriptors:
-      - key: user
-        value: default
-        rate_limit:
-          unit: second
-          requests_per_unit: 10
-        # Token-based rate limiting
-        token_limit:
-          unit: second
-          tokens_per_unit: 50
-
----
-# Gateway extension for rate limiting
 apiVersion: gateway.kgateway.dev/v1alpha1
 kind: GatewayExtension
 metadata:
@@ -91,12 +12,147 @@ metadata:
 spec:
   type: RateLimit
   rateLimit:
-    domain: kgateway
     grpcService:
       backendRef:
-        name: rate-limit-server
+        name: ratelimit
+        namespace: kgateway-test-extensions
         port: 8081
-
+    domain: "api-gateway"
+    timeout: "100ms"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ratelimit-config
+  namespace: kgateway-test-extensions
+immutable: true
+data:
+  config.yaml: |
+    domain: api-gateway
+    descriptors:
+      - key: X-User-ID
+        rate_limit:
+          unit: second
+          requests_per_unit: 50  # Token-based: maxTokens from tokenBucket
+      - key: path
+        value: "/path1"
+        rate_limit:
+          unit: minute
+          requests_per_unit: 1
+      - key: path
+        value: "/path2"
+        rate_limit:
+          unit: minute
+          requests_per_unit: 2
+      - key: X-User-ID
+        rate_limit:
+          unit: minute
+          requests_per_unit: 1
+      - key: X-User-ID
+        value: user1
+        rate_limit:
+          unit: minute
+          requests_per_unit: 1
+      - key: service
+        value: premium-api
+        rate_limit:
+          unit: minute
+          requests_per_unit: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: kgateway-test-extensions
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: kgateway-test-extensions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.4.3
+        ports:
+        - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ratelimit
+  namespace: kgateway-test-extensions
+spec:
+  ports:
+  - port: 8081
+    name: grpc
+    targetPort: 8081
+    appProtocol: kubernetes.io/h2c
+  selector:
+    app: ratelimit
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ratelimit
+  namespace: kgateway-test-extensions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ratelimit
+  template:
+    metadata:
+      labels:
+        app: ratelimit
+        app.kubernetes.io/name: ratelimit
+    spec:
+      containers:
+      - name: ratelimit
+        image: docker.io/envoyproxy/ratelimit:3e085e5b
+        command: ["/bin/ratelimit"]
+        ports:
+        - containerPort: 8081
+          name: grpc
+        - containerPort: 6070
+          name: debug
+        env:
+        - name: USE_STATSD
+          value: "false"
+        - name: LOG_LEVEL
+          value: "debug"
+        - name: RUNTIME_ROOT
+          value: /data
+        - name: RUNTIME_SUBDIRECTORY
+          value: ratelimit
+        - name: RUNTIME_IGNOREDOTFILES
+          value: "true"
+        - name: REDIS_SOCKET_TYPE
+          value: "tcp"
+        - name: REDIS_URL
+          value: "redis:6379"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /data/ratelimit/config
+      volumes:
+      - name: config-volume
+        configMap:
+          name: ratelimit-config
 ---
 # Global token-based rate limiting policy
 apiVersion: gateway.kgateway.dev/v1alpha1
@@ -110,13 +166,54 @@ spec:
     name: super-gateway
   rateLimit:
     global:
+      tokenBucket:
+        maxTokens: 50
+        tokensPerFill: 10
+        fillInterval: 10s
+        type: tokens
       descriptors:
       - entries:
-        - type: Generic
-          generic:
-            key: "user"
-            value: "default"
+        - type: Header
+          header: "X-User-ID"
         type: tokens  # Token-based rate limiting
       extensionRef:
         name: global-ratelimit
         namespace: kgateway-test-extensions
+---
+# OpenAI Backend
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: openai-backend
+spec:
+  type: AI
+  ai:
+    llm:
+      openai:
+        authToken:
+          kind: SecretRef
+          secretRef:
+            name: openai-secret
+        model: gpt-3.5-turbo
+
+---
+# HTTPRoute to OpenAI backend
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: openai-route
+spec:
+  parentRefs:
+  - name: super-gateway
+  hostnames:
+  - "ai.example.com"
+  rules:
+  - backendRefs:
+    - name: openai-backend
+      kind: Backend
+      group: gateway.kgateway.dev
+      port: 443
+    matches:
+    - path:
+        type: PathPrefix
+        value: /v1

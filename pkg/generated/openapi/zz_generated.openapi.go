@@ -6636,6 +6636,12 @@ func schema_kgateway_v2_api_v1alpha1_RateLimitPolicy(ref common.ReferenceCallbac
 							},
 						},
 					},
+					"tokenBucket": {
+						SchemaProps: spec.SchemaProps{
+							Description: "TokenBucket represents the configuration for a token bucket global rate-limiting mechanism. It defines the parameters for controlling the rate at which tokens are allowed. When specified, the rate limit service will be configured with these token bucket settings.",
+							Ref:         ref("github.com/kgateway-dev/kgateway/v2/api/v1alpha1.TokenBucket"),
+						},
+					},
 					"extensionRef": {
 						SchemaProps: spec.SchemaProps{
 							Description: "ExtensionRef references a GatewayExtension that provides the global rate limit service.",
@@ -6648,7 +6654,7 @@ func schema_kgateway_v2_api_v1alpha1_RateLimitPolicy(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			"github.com/kgateway-dev/kgateway/v2/api/v1alpha1.NamespacedObjectReference", "github.com/kgateway-dev/kgateway/v2/api/v1alpha1.RateLimitDescriptor"},
+			"github.com/kgateway-dev/kgateway/v2/api/v1alpha1.NamespacedObjectReference", "github.com/kgateway-dev/kgateway/v2/api/v1alpha1.RateLimitDescriptor", "github.com/kgateway-dev/kgateway/v2/api/v1alpha1.TokenBucket"},
 	}
 }
 

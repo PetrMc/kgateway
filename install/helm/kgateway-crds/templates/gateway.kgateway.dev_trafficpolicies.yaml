@@ -708,6 +708,34 @@ spec:
                         required:
                         - name
                         type: object
+                      tokenBucket:
+                        properties:
+                          fillInterval:
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: must be at least 50ms
+                              rule: duration(self) >= duration('50ms')
+                          maxTokens:
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          tokensPerFill:
+                            default: 1
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          type:
+                            default: requests
+                            enum:
+                            - requests
+                            - tokens
+                            type: string
+                        required:
+                        - fillInterval
+                        - maxTokens
+                        type: object
                     required:
                     - descriptors
                     - extensionRef

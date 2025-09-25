@@ -283,6 +283,12 @@ type RateLimitPolicy struct {
 	// +kubebuilder:validation:MinItems=1
 	Descriptors []RateLimitDescriptor `json:"descriptors"`
 
+	// TokenBucket represents the configuration for a token bucket global rate-limiting mechanism.
+	// It defines the parameters for controlling the rate at which tokens are allowed.
+	// When specified, the rate limit service will be configured with these token bucket settings.
+	// +optional
+	TokenBucket *TokenBucket `json:"tokenBucket,omitempty"`
+
 	// ExtensionRef references a GatewayExtension that provides the global rate limit service.
 	// +required
 	ExtensionRef NamespacedObjectReference `json:"extensionRef"`

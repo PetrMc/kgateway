@@ -4012,6 +4012,11 @@ func (in *RateLimitPolicy) DeepCopyInto(out *RateLimitPolicy) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.TokenBucket != nil {
+		in, out := &in.TokenBucket, &out.TokenBucket
+		*out = new(TokenBucket)
+		(*in).DeepCopyInto(*out)
+	}
 	in.ExtensionRef.DeepCopyInto(&out.ExtensionRef)
 }
 

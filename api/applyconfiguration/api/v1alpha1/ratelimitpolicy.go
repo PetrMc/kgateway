@@ -6,6 +6,7 @@ package v1alpha1
 // with apply.
 type RateLimitPolicyApplyConfiguration struct {
 	Descriptors  []RateLimitDescriptorApplyConfiguration      `json:"descriptors,omitempty"`
+	TokenBucket  *TokenBucketApplyConfiguration               `json:"tokenBucket,omitempty"`
 	ExtensionRef *NamespacedObjectReferenceApplyConfiguration `json:"extensionRef,omitempty"`
 }
 
@@ -25,6 +26,14 @@ func (b *RateLimitPolicyApplyConfiguration) WithDescriptors(values ...*RateLimit
 		}
 		b.Descriptors = append(b.Descriptors, *values[i])
 	}
+	return b
+}
+
+// WithTokenBucket sets the TokenBucket field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the TokenBucket field is set to the value of the last call.
+func (b *RateLimitPolicyApplyConfiguration) WithTokenBucket(value *TokenBucketApplyConfiguration) *RateLimitPolicyApplyConfiguration {
+	b.TokenBucket = value
 	return b
 }
 

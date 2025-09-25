@@ -2190,6 +2190,9 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         namedType: com.github.kgateway-dev.kgateway.v2.api.v1alpha1.NamespacedObjectReference
       default: {}
+    - name: tokenBucket
+      type:
+        namedType: com.github.kgateway-dev.kgateway.v2.api.v1alpha1.TokenBucket
 - name: com.github.kgateway-dev.kgateway.v2.api.v1alpha1.RateLimitProvider
   map:
     fields:
