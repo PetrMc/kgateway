@@ -12,6 +12,7 @@ type TokenBucketApplyConfiguration struct {
 	MaxTokens     *int32       `json:"maxTokens,omitempty"`
 	TokensPerFill *int32       `json:"tokensPerFill,omitempty"`
 	FillInterval  *v1.Duration `json:"fillInterval,omitempty"`
+	Type          *string      `json:"type,omitempty"`
 }
 
 // TokenBucketApplyConfiguration constructs a declarative configuration of the TokenBucket type for use with
@@ -41,5 +42,13 @@ func (b *TokenBucketApplyConfiguration) WithTokensPerFill(value int32) *TokenBuc
 // If called multiple times, the FillInterval field is set to the value of the last call.
 func (b *TokenBucketApplyConfiguration) WithFillInterval(value v1.Duration) *TokenBucketApplyConfiguration {
 	b.FillInterval = &value
+	return b
+}
+
+// WithType sets the Type field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Type field is set to the value of the last call.
+func (b *TokenBucketApplyConfiguration) WithType(value string) *TokenBucketApplyConfiguration {
+	b.Type = &value
 	return b
 }

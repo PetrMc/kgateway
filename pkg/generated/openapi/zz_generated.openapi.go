@@ -7641,6 +7641,13 @@ func schema_kgateway_v2_api_v1alpha1_TokenBucket(ref common.ReferenceCallback) c
 							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Duration"),
 						},
 					},
+					"type": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Type specifies the type of rate limiting to apply. \"requests\" means each request consumes 1 token. \"tokens\" means the rate limiter tracks actual token consumption based on request content.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 				},
 				Required: []string{"maxTokens", "fillInterval"},
 			},

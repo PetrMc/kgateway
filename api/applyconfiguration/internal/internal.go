@@ -2562,6 +2562,9 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: tokensPerFill
       type:
         scalar: numeric
+    - name: type
+      type:
+        scalar: string
 - name: com.github.kgateway-dev.kgateway.v2.api.v1alpha1.Tracing
   map:
     fields:

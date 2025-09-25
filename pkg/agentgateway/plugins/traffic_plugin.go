@@ -798,6 +798,20 @@ func processLocalRateLimitPolicy(trafficPolicy *v1alpha1.TrafficPolicy, policyNa
 		tokensPerFill = 1
 	}
 
+	// Determine the rate limit type based on configuration
+	rateLimitType := api.PolicySpec_LocalRateLimit_REQUEST // default to requests
+	if tokenBucket.Type != nil {
+		switch *tokenBucket.Type {
+		case "tokens":
+			rateLimitType = api.PolicySpec_LocalRateLimit_TOKEN
+		case "requests":
+			rateLimitType = api.PolicySpec_LocalRateLimit_REQUEST
+		default:
+			logger.Warn("unknown rate limit type, defaulting to requests", "type", *tokenBucket.Type)
+			rateLimitType = api.PolicySpec_LocalRateLimit_REQUEST
+		}
+	}
+
 	localRateLimitPolicy := &api.Policy{
 		Name:   policyName + localRateLimitPolicySuffix,
 		Target: policyTarget,
@@ -807,7 +821,7 @@ func processLocalRateLimitPolicy(trafficPolicy *v1alpha1.TrafficPolicy, policyNa
 					MaxTokens:     uint64(tokenBucket.MaxTokens),
 					TokensPerFill: tokensPerFill,
 					FillInterval:  &durationpb.Duration{Seconds: int64(fillIntervalSeconds)},
-					Type:          api.PolicySpec_LocalRateLimit_REQUEST,
+					Type:          rateLimitType,
 				},
 			},
 		},

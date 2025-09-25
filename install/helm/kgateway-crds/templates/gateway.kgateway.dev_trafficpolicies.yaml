@@ -726,6 +726,12 @@ spec:
                             format: int32
                             minimum: 1
                             type: integer
+                          type:
+                            default: requests
+                            enum:
+                            - requests
+                            - tokens
+                            type: string
                         required:
                         - fillInterval
                         - maxTokens
